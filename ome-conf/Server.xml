@@ -17,14 +17,13 @@
 	</Modules>
 
 	<Bind>
-		<!-- API Server disabled — requires AccessToken, not needed for now
 		<Managers>
 			<API>
 				<Port>${env:OME_API_PORT:8081}</Port>
 				<WorkerCount>1</WorkerCount>
+				<AccessToken>${env:OME_API_ACCESS_TOKEN:mycelium-ome-token}</AccessToken>
 			</API>
 		</Managers>
-		-->
 
 		<Providers>
 			<RTMP>

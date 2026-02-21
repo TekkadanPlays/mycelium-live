@@ -7,16 +7,15 @@ import fs from "fs";
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const OME_API_HOST = process.env.OME_API_HOST || "localhost";
 const OME_API_PORT = process.env.OME_API_PORT || "8081";
-const OME_API_USER = process.env.OME_API_USER || "admin";
-const OME_API_PASS = process.env.OME_API_PASS || "admin";
+const OME_API_TOKEN = process.env.OME_API_ACCESS_TOKEN || "mycelium-ome-token";
 const STREAM_KEY = process.env.STREAM_KEY || "";
 
 const root = import.meta.dir;
 const publicDir = path.join(root, "dist/public");
 const indexHtml = path.join(publicDir, "index.html");
 
-// Basic auth header for OME API
-const omeAuthHeader = "Basic " + btoa(`${OME_API_USER}:${OME_API_PASS}`);
+// OME API uses Basic auth where the base64-decoded value must match <AccessToken>
+const omeAuthHeader = "Basic " + btoa(OME_API_TOKEN);
 
 function omeApiUrl(path: string): string {
   return `http://${OME_API_HOST}:${OME_API_PORT}${path}`;
