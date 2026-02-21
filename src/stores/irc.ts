@@ -83,10 +83,9 @@ function handleServerEvent(event: any) {
     case 'network:status':
       if (event.connected) {
         state = { ...state, connected: true, connecting: false };
-        // Auto-join the target channel once connected
-        if (activeChannel && state.networkId) {
-          send({ type: 'join', networkId: state.networkId, channel: activeChannel });
-        }
+        // Don't send JOIN here — autojoin in ConnectOptions handles it
+        // after IRC registration (001 RPL_WELCOME). Sending JOIN here
+        // races ahead of registration and causes 451 ERR_NOTREGISTERED.
       } else {
         // Don't clear messages on temporary disconnect — preserve chat history
         state = { ...state, connected: false, connecting: false };
