@@ -99,7 +99,7 @@ export class ChatContainer extends Component<{}, ChatState> {
     this.unsubLive?.();
     this.unsubIrc?.();
     this.unsubAuth?.();
-    disconnectIrc();
+    // Don't disconnect IRC on unmount — the store persists across remounts
   }
 
   componentDidUpdate(_prevProps: {}, prevState: ChatState) {
@@ -113,8 +113,11 @@ export class ChatContainer extends Component<{}, ChatState> {
 
   private connectToIrc() {
     const auth = getAuthState();
+    const irc = getIrcState();
+    // Don't reconnect if already connected or connecting
+    if (irc.connected || irc.connecting) return;
     const nick = auth.pubkey ? shortenNpub(npubEncode(auth.pubkey)) : `guest_${Math.random().toString(36).slice(2, 6)}`;
-    connectIrc(nick, '#lobby');
+    connectIrc(nick, '#mycelium-hub');
   }
 
   private scrollToBottom() {
@@ -224,8 +227,9 @@ export class ChatContainer extends Component<{}, ChatState> {
               <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" />
             </svg>
             <p class="text-xs text-muted-foreground">IRC disconnected</p>
-            <Button size="sm" variant="outline" onClick={() => this.connectToIrc()} className="text-xs">
-              Reconnect
+            <p class="text-[10px] text-muted-foreground/50 mb-2">Reconnecting automatically...</p>
+            <Button size="sm" variant="outline" onClick={() => { const auth = getAuthState(); const nick = auth.pubkey ? shortenNpub(npubEncode(auth.pubkey)) : `guest_${Math.random().toString(36).slice(2, 6)}`; connectIrc(nick, '#mycelium-hub'); }} className="text-xs">
+              Reconnect Now
             </Button>
           </div>
         </div>
@@ -245,7 +249,7 @@ export class ChatContainer extends Component<{}, ChatState> {
         <div class="flex-1 overflow-y-auto">
           {ircMessages.length === 0 && (
             <div class="px-3 py-6 text-center">
-              <p class="text-xs text-muted-foreground/50">Connected to {ircChannel || '#lobby'}. Say hello!</p>
+              <p class="text-xs text-muted-foreground/50">Connected to {ircChannel || '#mycelium-hub'}. Say hello!</p>
             </div>
           )}
           {ircMessages.map((msg) => {
@@ -335,7 +339,7 @@ export class ChatContainer extends Component<{}, ChatState> {
                 value={input}
                 onInput={this.handleInput}
                 onKeyDown={this.handleKeyDown}
-                placeholder={activeTab === 'irc' ? `Message ${this.state.ircChannel || '#lobby'}...` : 'Send a message...'}
+                placeholder={activeTab === 'irc' ? `Message ${this.state.ircChannel || '#mycelium-hub'}...` : 'Send a message...'}
                 className="text-sm h-8"
                 disabled={activeTab === 'nostr' && nostrSending}
               />

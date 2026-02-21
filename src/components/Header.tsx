@@ -121,20 +121,22 @@ export class Header extends Component<HeaderProps, HeaderState> {
         <div class="flex-1" />
 
         {/* Broadcast to Nostr button — only for allowed streamers */}
-        {online && pubkey && this.state.canBroadcast && (
+        {pubkey && this.state.canBroadcast && (
           <Button
-            variant={liveEventActive ? 'destructive' : 'default'}
+            variant={liveEventActive ? 'destructive' : online ? 'default' : 'secondary'}
             size="sm"
             onClick={this.handleBroadcast}
-            disabled={liveEventPublishing}
+            disabled={liveEventPublishing || (!online && !liveEventActive)}
             className="gap-1.5 text-xs"
           >
             {liveEventPublishing ? (
               <span>Publishing...</span>
             ) : liveEventActive ? (
               <span class="flex items-center gap-1.5"><svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1 0 12.728 12.728M5.636 5.636a9 9 0 0 1 12.728 12.728M5.636 5.636 18.364 18.364" /></svg>End Broadcast</span>
-            ) : (
+            ) : online ? (
               <span class="flex items-center gap-1.5"><svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788" /></svg>Broadcast to Nostr</span>
+            ) : (
+              <span class="flex items-center gap-1.5"><svg class="size-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788" /></svg>Not Broadcasting</span>
             )}
           </Button>
         )}

@@ -27,6 +27,7 @@ const HYPHAE_WS_URL = 'wss://chat.mycelium.social/ws';
 const IRC_HOST = '127.0.0.1';
 const IRC_PORT = 6667;
 const MAX_MESSAGES = 500;
+const RECONNECT_DELAY = 5000;
 
 let state: IrcState = {
   connected: false,
@@ -42,11 +43,19 @@ let state: IrcState = {
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let activeChannel: string | null = null;
+let storedNick: string = '';
+let intentionalDisconnect = false;
 
 const listeners: Set<Listener> = new Set();
 
+let notifyScheduled = false;
 function notify() {
-  for (const fn of listeners) fn();
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  queueMicrotask(() => {
+    notifyScheduled = false;
+    for (const fn of listeners) fn();
+  });
 }
 
 export function getIrcState(): IrcState {
@@ -79,19 +88,20 @@ function handleServerEvent(event: any) {
           send({ type: 'join', networkId: state.networkId, channel: activeChannel });
         }
       } else {
-        state = { ...state, connected: false };
+        // Don't clear messages on temporary disconnect — preserve chat history
+        state = { ...state, connected: false, connecting: false };
       }
       notify();
       break;
 
     case 'network:remove':
+      // Preserve messages so they survive reconnect cycles
       state = {
         ...state,
         connected: false,
         connecting: false,
         networkId: null,
         channel: null,
-        messages: [],
         users: {},
       };
       notify();
@@ -183,7 +193,11 @@ function handleServerEvent(event: any) {
  * @param nick - IRC nickname (e.g. npub short form or display name)
  * @param channel - Channel to auto-join (e.g. '#lobby' or '#live-stream')
  */
-export function connectIrc(nick: string, channel: string = '#lobby') {
+export function connectIrc(nick: string, channel: string = '#mycelium-hub') {
+  // Store nick for reconnects
+  storedNick = nick;
+  intentionalDisconnect = false;
+
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
     // Already connected — just switch channel if needed
     if (activeChannel !== channel && state.networkId) {
@@ -198,8 +212,19 @@ export function connectIrc(nick: string, channel: string = '#lobby') {
     return;
   }
 
+  // If already connecting/reconnecting, don't create duplicate WebSocket
+  if (state.connecting) return;
+
   activeChannel = channel;
-  state = { ...state, connecting: true, nick, messages: [], users: {} };
+  // Preserve existing messages on reconnect — only clear on first connect
+  const isReconnect = state.messages.length > 0;
+  state = {
+    ...state,
+    connecting: true,
+    nick,
+    users: {},
+    ...(isReconnect ? {} : { messages: [] }),
+  };
   notify();
 
   ws = new WebSocket(HYPHAE_WS_URL);
@@ -229,14 +254,17 @@ export function connectIrc(nick: string, channel: string = '#lobby') {
   };
 
   ws.onclose = () => {
+    // Preserve messages and channel — only clear connection state
     state = { ...state, connected: false, connecting: false, networkId: null };
     notify();
     ws = null;
-    // Auto-reconnect after 5s if we were connected
-    if (activeChannel) {
+    // Auto-reconnect unless intentionally disconnected
+    if (activeChannel && !intentionalDisconnect) {
       reconnectTimer = setTimeout(() => {
-        if (activeChannel) connectIrc(nick, activeChannel);
-      }, 5000);
+        if (activeChannel && !intentionalDisconnect) {
+          connectIrc(storedNick, activeChannel);
+        }
+      }, RECONNECT_DELAY);
     }
   };
 
@@ -246,6 +274,7 @@ export function connectIrc(nick: string, channel: string = '#lobby') {
 }
 
 export function disconnectIrc() {
+  intentionalDisconnect = true;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -270,6 +299,7 @@ export function disconnectIrc() {
     users: {},
     sending: false,
   };
+  storedNick = '';
   notify();
 }
 
