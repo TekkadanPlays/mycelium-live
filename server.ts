@@ -56,35 +56,8 @@ const server = Bun.serve({
       }
     }
 
-    // --- OME media proxy (LLHLS + WebRTC signaling) ---
-    // Forward /app/* to OME so the player can use same-origin relative URLs
-    if (pathname.startsWith("/app/")) {
-      const omeUrl = `http://${OME_HOST}:${OME_LLHLS_PORT}${pathname}${url.search}`;
-      try {
-        const omeRes = await fetch(omeUrl, {
-          method: req.method,
-          body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
-          signal: AbortSignal.timeout(10000),
-        });
-        // Bun auto-decompresses gzip, so strip encoding/length to avoid mismatch
-        const headers = new Headers();
-        for (const [k, v] of omeRes.headers.entries()) {
-          const lk = k.toLowerCase();
-          if (lk === "content-encoding" || lk === "content-length") continue;
-          headers.set(k, v);
-        }
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-        return new Response(omeRes.body, {
-          status: omeRes.status,
-          headers,
-        });
-      } catch {
-        return new Response("OME unreachable", { status: 502 });
-      }
-    }
-
     // --- Stream status (probe LLHLS manifest) ---
+    // Note: /app/* paths are routed by HAProxy directly to OME port 3333
     if (pathname === "/api/status") {
       const online = await checkStreamOnline(DEFAULT_STREAM);
       return Response.json(
