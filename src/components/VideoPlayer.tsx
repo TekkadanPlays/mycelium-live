@@ -98,8 +98,14 @@ export class VideoPlayer extends Component<VideoPlayerProps, VideoPlayerState> {
           this.setState({ playing: true, error: null });
         });
         this.hlsInstance.on(Hls.Events.ERROR, (_: any, data: any) => {
+          console.error('[HLS error]', data.type, data.details, data.fatal, {
+            url: data.url || data.frag?.url,
+            response: data.response,
+            reason: data.reason,
+            err: data.err,
+          });
           if (data.fatal) {
-            this.setState({ error: `HLS error: ${data.type}` });
+            this.setState({ error: `HLS error: ${data.details || data.type}` });
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
