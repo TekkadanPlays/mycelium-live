@@ -10,6 +10,7 @@ import { signWithExtension, hasNip07 } from '../../nostr/nip07';
 import { loadLiveEventsEnabled } from '../../nostr/stores/liveevents';
 import { discoverBroadcastRelays } from '../../nostr/stores/broadcast';
 import { initTheme } from '../../stores/theme';
+import { fetchAllowedStreamers, isAllowedStreamer, subscribeStreamers } from '../../stores/streamers';
 import { shortenNpub, npubEncode } from '../../nostr/utils';
 import { ThemeSelector } from '../ThemeSelector';
 import { StreamTab } from './StreamTab';
@@ -27,6 +28,7 @@ interface AdminPageState {
 
 export class AdminPage extends Component<{}, AdminPageState> {
   private unsubAuth: (() => void) | null = null;
+  private unsubStreamers: (() => void) | null = null;
   private lastPubkey: string | null = null;
 
   state: AdminPageState = {
@@ -53,6 +55,8 @@ export class AdminPage extends Component<{}, AdminPageState> {
     restoreSession();
     this.updateAuthSigner();
     this.unsubAuth = subscribeAuth(() => this.onAuthChange());
+    this.unsubStreamers = subscribeStreamers(() => this.onAuthChange());
+    fetchAllowedStreamers();
     connectRelays().then(() => {
       this.onAuthChange();
     }).catch((err) => console.warn('[live-admin] Relay connect error:', err));
@@ -67,6 +71,7 @@ export class AdminPage extends Component<{}, AdminPageState> {
 
   componentWillUnmount() {
     this.unsubAuth?.();
+    this.unsubStreamers?.();
   }
 
   private updateAuthSigner() {
@@ -92,8 +97,12 @@ export class AdminPage extends Component<{}, AdminPageState> {
       bootstrapUser(auth.pubkey).catch((err) =>
         console.warn('[live-admin] Bootstrap error:', err)
       );
-      // Auto-authenticate if Nostr identity is present
-      this.setState({ authenticated: true, authChecking: false });
+      // Only authenticate if this pubkey is an allowed streamer
+      if (isAllowedStreamer(auth.pubkey)) {
+        this.setState({ authenticated: true, authChecking: false });
+      } else {
+        this.setState({ authenticated: false, authChecking: false });
+      }
     }
   }
 

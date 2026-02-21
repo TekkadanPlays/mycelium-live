@@ -12,6 +12,7 @@ import { discoverIndexers } from '../nostr/stores/indexers';
 import { loadLiveEventsEnabled } from '../nostr/stores/liveevents';
 import { initTheme } from '../stores/theme';
 import { getStreamState, subscribeStream, startPolling, stopPolling } from '../stores/stream';
+import { fetchAllowedStreamers } from '../stores/streamers';
 import type { StreamInfo } from '../stores/stream';
 
 interface AppState {
@@ -68,6 +69,7 @@ export class App extends Component<{}, AppState> {
 
     restoreSession();
     this.onAuthChange();
+    fetchAllowedStreamers();
 
     // Start polling OME for stream status
     this.unsubStream = subscribeStream(() => {

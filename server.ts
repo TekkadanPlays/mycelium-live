@@ -9,6 +9,12 @@ const OME_HOST = process.env.OME_HOST || "127.0.0.1";
 const OME_LLHLS_PORT = process.env.OME_LLHLS_PORT || "3333";
 const STREAM_KEY = process.env.STREAM_KEY || "";
 
+// Comma-separated list of hex pubkeys allowed to broadcast / access admin
+const ALLOWED_PUBKEYS: string[] = (process.env.ALLOWED_PUBKEYS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const root = import.meta.dir;
 const publicDir = path.join(root, "dist/public");
 const indexHtml = path.join(publicDir, "index.html");
@@ -54,6 +60,14 @@ const server = Bun.serve({
       } catch {
         return Response.json({ allowed: true });
       }
+    }
+
+    // --- Allowed streamers list ---
+    if (pathname === "/api/streamers") {
+      return Response.json(
+        { pubkeys: ALLOWED_PUBKEYS },
+        { headers: { "Access-Control-Allow-Origin": "*" } },
+      );
     }
 
     // --- Stream status (probe LLHLS manifest) ---

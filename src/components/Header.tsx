@@ -6,6 +6,7 @@ import { hasNip07 } from '../nostr/nip07';
 import { shortenNpub, npubEncode } from '../nostr/utils';
 import { ThemeSelector } from './ThemeSelector';
 import { onStreamStart, onStreamEnd, getLiveEventState, subscribeLiveEvents } from '../nostr/stores/liveevents';
+import { isAllowedStreamer, subscribeStreamers } from '../stores/streamers';
 
 interface HeaderProps {
   online: boolean;
@@ -20,23 +21,29 @@ interface HeaderState {
   authLoading: boolean;
   liveEventActive: boolean;
   liveEventPublishing: boolean;
+  canBroadcast: boolean;
 }
 
 export class Header extends Component<HeaderProps, HeaderState> {
   private unsubAuth: (() => void) | null = null;
   private unsubLive: (() => void) | null = null;
+  private unsubStreamers: (() => void) | null = null;
 
   state: HeaderState = {
     pubkey: getAuthState().pubkey,
     authLoading: getAuthState().isLoading,
     liveEventActive: !!getLiveEventState().currentEvent,
     liveEventPublishing: getLiveEventState().isPublishing,
+    canBroadcast: isAllowedStreamer(getAuthState().pubkey),
   };
 
   componentDidMount() {
     this.unsubAuth = subscribeAuth(() => {
       const auth = getAuthState();
-      this.setState({ pubkey: auth.pubkey, authLoading: auth.isLoading });
+      this.setState({ pubkey: auth.pubkey, authLoading: auth.isLoading, canBroadcast: isAllowedStreamer(auth.pubkey) });
+    });
+    this.unsubStreamers = subscribeStreamers(() => {
+      this.setState({ canBroadcast: isAllowedStreamer(getAuthState().pubkey) });
     });
     this.unsubLive = subscribeLiveEvents(() => {
       const le = getLiveEventState();
@@ -47,6 +54,7 @@ export class Header extends Component<HeaderProps, HeaderState> {
   componentWillUnmount() {
     this.unsubAuth?.();
     this.unsubLive?.();
+    this.unsubStreamers?.();
   }
 
   private handleLogin = () => {
@@ -112,8 +120,8 @@ export class Header extends Component<HeaderProps, HeaderState> {
 
         <div class="flex-1" />
 
-        {/* Broadcast to Nostr button */}
-        {online && pubkey && (
+        {/* Broadcast to Nostr button — only for allowed streamers */}
+        {online && pubkey && this.state.canBroadcast && (
           <Button
             variant={liveEventActive ? 'destructive' : 'default'}
             size="sm"
@@ -158,7 +166,8 @@ export class Header extends Component<HeaderProps, HeaderState> {
           </Button>
         )}
 
-        {/* Admin link */}
+        {/* Admin link — only for allowed streamers */}
+        {this.state.canBroadcast && (
         <a href="/admin" target="_self">
           <Button variant="ghost" size="sm">
             <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -167,6 +176,7 @@ export class Header extends Component<HeaderProps, HeaderState> {
             </svg>
           </Button>
         </a>
+        )}
       </header>
     );
   }
