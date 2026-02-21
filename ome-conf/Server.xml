@@ -17,13 +17,14 @@
 	</Modules>
 
 	<Bind>
-		<!-- API Server for REST management -->
+		<!-- API Server disabled — requires AccessToken, not needed for now
 		<Managers>
 			<API>
 				<Port>${env:OME_API_PORT:8081}</Port>
 				<WorkerCount>1</WorkerCount>
 			</API>
 		</Managers>
+		-->
 
 		<Providers>
 			<RTMP>
