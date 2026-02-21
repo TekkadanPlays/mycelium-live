@@ -90,16 +90,12 @@
 				<Names>
 					<Name>*</Name>
 				</Names>
-				<TLS>
-					<CertPath>./cert.crt</CertPath>
-					<KeyPath>./cert.key</KeyPath>
-					<ChainCertPath>./cert.ca-bundle</ChainCertPath>
-				</TLS>
+				<!-- TLS handled by HAProxy — no certs needed here -->
 			</Host>
 
 			<!-- Admission webhook — Bun middleware validates stream keys -->
 			<AdmissionWebhooks>
-				<ControlServerUrl>http://web:8080/api/admission</ControlServerUrl>
+				<ControlServerUrl>http://127.0.0.1:8085/api/admission</ControlServerUrl>
 				<SecretKey></SecretKey>
 				<Timeout>3000</Timeout>
 				<Enables>
