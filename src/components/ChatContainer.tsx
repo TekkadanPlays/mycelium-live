@@ -1,6 +1,6 @@
 import { Component } from 'inferno';
 import { createElement } from 'inferno-create-element';
-import { Button, Input, Badge } from 'blazecn';
+import { Button, Input } from 'blazecn';
 import { getLiveChatState, subscribeLiveChat, sendLiveChatMessage } from '../nostr/stores/livechat';
 import { getLiveEventState, subscribeLiveEvents } from '../nostr/stores/liveevents';
 import { getAuthState } from '../nostr/stores/auth';
