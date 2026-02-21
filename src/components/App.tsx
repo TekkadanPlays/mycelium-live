@@ -3,6 +3,7 @@ import { createElement } from 'inferno-create-element';
 import { Spinner, Button, Card, CardContent, Toaster } from 'blazecn';
 import { Header } from './Header';
 import { VideoPlayer } from './VideoPlayer';
+import { StreamInfoPanel } from './StreamInfoPanel';
 import { OfflineBanner } from './OfflineBanner';
 import { ChatContainer } from './ChatContainer';
 import { getAuthState, subscribeAuth, restoreSession, resetAllStores } from '../nostr/stores/auth';
@@ -138,6 +139,11 @@ export class App extends Component<{}, AppState> {
             ) : (
               <OfflineBanner />
             )}
+            <StreamInfoPanel
+              online={stream.online}
+              streamName={stream.name}
+              viewerCount={0}
+            />
             <div class="flex-1" />
           </div>
           {/* Chat sidebar */}

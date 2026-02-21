@@ -5,6 +5,7 @@ import { createLiveEvent, publishLiveEvent, updateLiveEvent } from '../nip53';
 import { getAuthState } from './auth';
 import { getBootstrapState } from './bootstrap';
 import { getSelectedBroadcastUrls } from './broadcast';
+import { startLiveChatSubscription, stopLiveChatSubscription } from './livechat';
 
 type Listener = () => void;
 
@@ -133,6 +134,11 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
           lastPublished: new Date().toISOString(),
         };
 
+        // Start live chat subscription for this event
+        const dTag = event.tags.find((t) => t[0] === 'd')?.[1] || '';
+        const eventATag = `30311:${auth.pubkey}:${dTag}`;
+        startLiveChatSubscription(eventATag, relays);
+
         // Set up periodic updates (every 60s)
         if (updateInterval) clearInterval(updateInterval);
         updateInterval = setInterval(() => {
@@ -176,6 +182,9 @@ export async function onStreamEnd(): Promise<void> {
   } catch (err) {
     console.error('[liveevents] Error ending live event:', err);
   }
+
+  // Stop live chat subscription
+  stopLiveChatSubscription();
 
   state = { ...state, currentEvent: null };
   notify();
