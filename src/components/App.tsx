@@ -6,11 +6,8 @@ import { VideoPlayer } from './VideoPlayer';
 import { OfflineBanner } from './OfflineBanner';
 import { ChatContainer } from './ChatContainer';
 import { getAuthState, subscribeAuth, restoreSession, resetAllStores } from '../nostr/stores/auth';
-import { signWithExtension } from '../nostr/nip07';
 import { bootstrapUser } from '../nostr/stores/bootstrap';
-import { loadRelayManager, syncPoolToActiveProfile } from '../nostr/stores/relaymanager';
 import { discoverIndexers } from '../nostr/stores/indexers';
-import { connectRelays, getPool } from '../nostr/stores/relay';
 import { loadLiveEventsEnabled } from '../nostr/stores/liveevents';
 import { initTheme } from '../stores/theme';
 import { getStreamState, subscribeStream, startPolling, stopPolling } from '../stores/stream';
@@ -37,19 +34,8 @@ export class App extends Component<{}, AppState> {
     isMobile: window.innerWidth <= 768,
   };
 
-  private updateAuthSigner() {
-    const auth = getAuthState();
-    const pool = getPool();
-    if (auth.pubkey) {
-      pool.setAuthSigner((unsigned) => signWithExtension(unsigned));
-    } else {
-      pool.setAuthSigner(null);
-    }
-  }
-
   private onAuthChange() {
     const auth = getAuthState();
-    this.updateAuthSigner();
 
     if (auth.pubkey && this.lastPubkey && auth.pubkey !== this.lastPubkey) {
       resetAllStores();
@@ -57,6 +43,11 @@ export class App extends Component<{}, AppState> {
     this.lastPubkey = auth.pubkey;
 
     if (auth.pubkey) {
+      // Only fetch profile metadata from indexers — do NOT connect to
+      // outbox/inbox relays here. Those connections trigger NIP-42 AUTH
+      // challenges which cause unwanted signer extension popups.
+      // Relay connections for NIP-53 publishing happen on-demand when
+      // the user clicks "Broadcast to Nostr".
       bootstrapUser(auth.pubkey).catch((err) =>
         console.warn('[live] Bootstrap error:', err)
       );
@@ -66,10 +57,8 @@ export class App extends Component<{}, AppState> {
   componentDidMount() {
     initTheme();
 
-    // Initialize Nostr identity system
+    // Initialize Nostr identity system (lightweight — no relay connections)
     this.unsubAuth = subscribeAuth(() => this.onAuthChange());
-    loadRelayManager();
-    syncPoolToActiveProfile();
     loadLiveEventsEnabled();
 
     discoverIndexers(10).catch((err) =>
@@ -77,10 +66,7 @@ export class App extends Component<{}, AppState> {
     );
 
     restoreSession();
-    this.updateAuthSigner();
-    connectRelays().then(() => {
-      this.onAuthChange();
-    }).catch((err) => console.warn('[live] Relay connect error:', err));
+    this.onAuthChange();
 
     // Start polling OME for stream status
     this.unsubStream = subscribeStream(() => {

@@ -171,12 +171,10 @@ async function doBootstrap(pubkey: string): Promise<void> {
 
   await queryIndexers(pubkey, indexerUrls);
 
-  // 3. Connect to outbox/inbox relays
-  if (state.relayList.length > 0) {
-    state = { ...state, phase: 'connecting_relays' };
-    notify();
-    await connectUserRelays(state.relayList);
-  }
+  // 3. Skip connecting to outbox/inbox relays on the live streaming page.
+  // Those connections trigger NIP-42 AUTH challenges which cause unwanted
+  // signer extension popups. Relay connections for NIP-53 publishing
+  // happen on-demand when the user clicks "Broadcast to Nostr".
 
   // 4. Done
   state = { ...state, phase: 'ready' };
