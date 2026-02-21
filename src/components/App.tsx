@@ -11,7 +11,7 @@ import { bootstrapUser } from '../nostr/stores/bootstrap';
 import { loadRelayManager, syncPoolToActiveProfile } from '../nostr/stores/relaymanager';
 import { discoverIndexers } from '../nostr/stores/indexers';
 import { connectRelays, getPool } from '../nostr/stores/relay';
-import { loadLiveEventsEnabled, onStreamStart, onStreamEnd } from '../nostr/stores/liveevents';
+import { loadLiveEventsEnabled } from '../nostr/stores/liveevents';
 import { initTheme } from '../stores/theme';
 import { getStreamState, subscribeStream, startPolling, stopPolling } from '../stores/stream';
 import type { StreamInfo } from '../stores/stream';
@@ -28,7 +28,6 @@ export class App extends Component<{}, AppState> {
   private unsubAuth: (() => void) | null = null;
   private unsubStream: (() => void) | null = null;
   private lastPubkey: string | null = null;
-  private wasOnline: boolean = false;
 
   state: AppState = {
     loading: true,
@@ -86,23 +85,11 @@ export class App extends Component<{}, AppState> {
     // Start polling OME for stream status
     this.unsubStream = subscribeStream(() => {
       const s = getStreamState();
-      const newOnline = s.info.online;
-      const wasOnline = this.wasOnline;
-
       this.setState({
         loading: s.isLoading && !s.info.online,
         error: s.error,
         stream: s.info,
       });
-
-      // NIP-53: auto-publish live events on stream state change
-      if (newOnline && !wasOnline) {
-        this.wasOnline = true;
-        onStreamStart(s.info.name || 'Live Stream', 0);
-      } else if (!newOnline && wasOnline) {
-        this.wasOnline = false;
-        onStreamEnd();
-      }
     });
     startPolling(5000);
 

@@ -63,12 +63,18 @@ const server = Bun.serve({
       try {
         const omeRes = await fetch(omeUrl, {
           method: req.method,
-          headers: req.headers,
           body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(10000),
         });
-        const headers = new Headers(omeRes.headers);
+        // Bun auto-decompresses gzip, so strip encoding/length to avoid mismatch
+        const headers = new Headers();
+        for (const [k, v] of omeRes.headers.entries()) {
+          const lk = k.toLowerCase();
+          if (lk === "content-encoding" || lk === "content-length") continue;
+          headers.set(k, v);
+        }
         headers.set("Access-Control-Allow-Origin", "*");
+        headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
         return new Response(omeRes.body, {
           status: omeRes.status,
           headers,

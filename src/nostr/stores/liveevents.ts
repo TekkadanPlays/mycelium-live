@@ -104,7 +104,7 @@ function getPublishRelays(): string[] {
  */
 export async function onStreamStart(streamTitle: string, viewerCount: number): Promise<void> {
   const auth = getAuthState();
-  if (!auth.pubkey || !state.enabled) return;
+  if (!auth.pubkey) return;
 
   state = { ...state, isPublishing: true, error: null };
   notify();
