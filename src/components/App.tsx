@@ -98,7 +98,7 @@ export class App extends Component<{}, AppState> {
       // NIP-53: auto-publish live events on stream state change
       if (newOnline && !wasOnline) {
         this.wasOnline = true;
-        onStreamStart(s.info.name || 'Live Stream', s.info.viewerCount);
+        onStreamStart(s.info.name || 'Live Stream', 0);
       } else if (!newOnline && wasOnline) {
         this.wasOnline = false;
         onStreamEnd();
@@ -152,7 +152,7 @@ export class App extends Component<{}, AppState> {
       <div class="flex flex-col h-screen bg-background">
         <Header
           online={stream.online}
-          viewerCount={stream.viewerCount}
+          viewerCount={0}
           streamName={stream.name}
           chatVisible={chatVisible}
           onToggleChat={this.toggleChat}

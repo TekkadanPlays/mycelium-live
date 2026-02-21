@@ -17,13 +17,15 @@
 	</Modules>
 
 	<Bind>
+		<!-- API disabled: OME v0.20 Docker image config parser rejects AccessToken -->
+		<!--
 		<Managers>
 			<API>
 				<Port>${env:OME_API_PORT:8081}</Port>
 				<WorkerCount>1</WorkerCount>
-				<AccessToken>${env:OME_API_ACCESS_TOKEN:mycelium-ome-token}</AccessToken>
 			</API>
 		</Managers>
+		-->
 
 		<Providers>
 			<RTMP>

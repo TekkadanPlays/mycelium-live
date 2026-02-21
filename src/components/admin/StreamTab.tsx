@@ -48,30 +48,10 @@ export class StreamTab extends Component<{}, StreamTabState> {
             </CardTitle>
             <CardDescription>
               {stream.online
-                ? `Streaming as "${stream.name}" with ${stream.viewerCount} viewer${stream.viewerCount !== 1 ? 's' : ''}`
+                ? `Streaming as "${stream.name}"`
                 : 'No active stream. Start broadcasting to go live.'}
             </CardDescription>
           </CardHeader>
-          {stream.online && stream.tracks && (
-            <CardContent>
-              <div class="grid grid-cols-2 gap-4 text-sm">
-                {stream.tracks.video && (
-                  <div class="space-y-1">
-                    <span class="text-xs text-muted-foreground font-medium uppercase tracking-wider">Video</span>
-                    <p>{stream.tracks.video.width}x{stream.tracks.video.height} @ {Math.round(stream.tracks.video.framerate)}fps</p>
-                    <p class="text-muted-foreground">{stream.tracks.video.codec} — {stream.tracks.video.bitrate}</p>
-                  </div>
-                )}
-                {stream.tracks.audio && (
-                  <div class="space-y-1">
-                    <span class="text-xs text-muted-foreground font-medium uppercase tracking-wider">Audio</span>
-                    <p>{stream.tracks.audio.codec} {stream.tracks.audio.samplerate}Hz {stream.tracks.audio.channel}ch</p>
-                    <p class="text-muted-foreground">{stream.tracks.audio.bitrate}</p>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          )}
         </Card>
 
         {/* Stream Configuration */}

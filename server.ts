@@ -2,48 +2,28 @@ import path from "path";
 import fs from "fs";
 
 // Mycelium Live — Bun middleware server
-// Serves the Inferno SPA, proxies OME API, handles admission webhooks
+// Serves the Inferno SPA, detects live streams via LLHLS probe, handles admission webhooks
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
-const OME_API_HOST = process.env.OME_API_HOST || "localhost";
-const OME_API_PORT = process.env.OME_API_PORT || "8081";
-const OME_API_TOKEN = process.env.OME_API_ACCESS_TOKEN || "mycelium-ome-token";
+const OME_HOST = process.env.OME_HOST || "127.0.0.1";
+const OME_LLHLS_PORT = process.env.OME_LLHLS_PORT || "3333";
 const STREAM_KEY = process.env.STREAM_KEY || "";
 
 const root = import.meta.dir;
 const publicDir = path.join(root, "dist/public");
 const indexHtml = path.join(publicDir, "index.html");
 
-// OME API uses Basic auth where the base64-decoded value must match <AccessToken>
-const omeAuthHeader = "Basic " + btoa(OME_API_TOKEN);
+// Default stream name used by OBS / RTMP ingest
+const DEFAULT_STREAM = "stream";
 
-function omeApiUrl(path: string): string {
-  return `http://${OME_API_HOST}:${OME_API_PORT}${path}`;
-}
-
-async function proxyToOme(req: Request, apiPath: string): Promise<Response> {
-  const url = omeApiUrl(apiPath);
-  const headers: Record<string, string> = {
-    Authorization: omeAuthHeader,
-    "Content-Type": "application/json",
-  };
-
+// Probe the LLHLS manifest to check if a stream is live
+async function checkStreamOnline(streamName: string): Promise<boolean> {
   try {
-    const omeRes = await fetch(url, {
-      method: req.method,
-      headers,
-      body: req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined,
-    });
-
-    return new Response(omeRes.body, {
-      status: omeRes.status,
-      headers: {
-        "Content-Type": omeRes.headers.get("Content-Type") || "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
-  } catch (err) {
-    return Response.json({ error: "OME API unreachable", detail: String(err) }, { status: 502 });
+    const url = `http://${OME_HOST}:${OME_LLHLS_PORT}/app/${streamName}/llhls.m3u8`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -52,12 +32,6 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const pathname = url.pathname;
-
-    // --- OME API proxy ---
-    if (pathname.startsWith("/api/ome/")) {
-      const apiPath = pathname.replace("/api/ome", "");
-      return proxyToOme(req, apiPath);
-    }
 
     // --- Admission webhook (OME calls this) ---
     if (pathname === "/api/admission" && req.method === "POST") {
@@ -71,7 +45,7 @@ const server = Bun.serve({
           // OME sends the stream key as the stream name in the URL
           // e.g. rtmp://host/app/STREAM_KEY
           const streamName = requestUrl.split("/").pop() || "";
-          if (streamName !== STREAM_KEY && streamName !== "stream") {
+          if (streamName !== STREAM_KEY && streamName !== DEFAULT_STREAM) {
             return Response.json({ allowed: false, reason: "Invalid stream key" });
           }
         }
@@ -82,23 +56,16 @@ const server = Bun.serve({
       }
     }
 
-    // --- Stream status shortcut ---
+    // --- Stream status (probe LLHLS manifest) ---
     if (pathname === "/api/status") {
-      try {
-        const res = await fetch(omeApiUrl("/v1/vhosts/default/apps/app/streams"), {
-          headers: { Authorization: omeAuthHeader },
-        });
-        if (!res.ok) return Response.json({ online: false, streams: [] });
-        const data = await res.json();
-        const streams = data.response || [];
-        return Response.json({ online: streams.length > 0, streams });
-      } catch {
-        return Response.json({ online: false, streams: [] });
-      }
+      const online = await checkStreamOnline(DEFAULT_STREAM);
+      return Response.json(
+        { online, stream: online ? DEFAULT_STREAM : null },
+        { headers: { "Access-Control-Allow-Origin": "*" } },
+      );
     }
 
     // --- Static file serving ---
-    // Try to serve the file directly
     const filePath = path.join(publicDir, pathname);
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       return new Response(Bun.file(filePath));
@@ -116,5 +83,5 @@ const server = Bun.serve({
 });
 
 console.log(`🍄 Mycelium Live server running on http://localhost:${server.port}`);
-console.log(`   OME API proxy: http://${OME_API_HOST}:${OME_API_PORT}`);
+console.log(`   OME LLHLS probe: http://${OME_HOST}:${OME_LLHLS_PORT}`);
 console.log(`   Static files: ${publicDir}`);
