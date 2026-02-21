@@ -3,9 +3,11 @@ import { createElement } from 'inferno-create-element';
 import { Button, Input } from 'blazecn';
 import { getLiveChatState, subscribeLiveChat, sendLiveChatMessage } from '../nostr/stores/livechat';
 import { getLiveEventState, subscribeLiveEvents } from '../nostr/stores/liveevents';
-import { getAuthState } from '../nostr/stores/auth';
+import { getAuthState, subscribeAuth } from '../nostr/stores/auth';
 import { shortenNpub, npubEncode } from '../nostr/utils';
+import { getIrcState, subscribeIrc, connectIrc, disconnectIrc, sendIrcMessage } from '../stores/irc';
 import type { LiveChatMessage } from '../nostr/stores/livechat';
+import type { IrcMessage } from '../stores/irc';
 
 type ChatTab = 'nostr' | 'irc';
 
@@ -30,21 +32,36 @@ interface ChatState {
   liveEventActive: boolean;
   input: string;
   pubkey: string | null;
+  ircMessages: IrcMessage[];
+  ircConnected: boolean;
+  ircConnecting: boolean;
+  ircChannel: string | null;
+  ircNick: string;
+  ircUserCount: number;
 }
 
 export class ChatContainer extends Component<{}, ChatState> {
   private messagesEndRef: HTMLDivElement | null = null;
+  private ircMessagesEndRef: HTMLDivElement | null = null;
   private unsubChat: (() => void) | null = null;
   private unsubLive: (() => void) | null = null;
+  private unsubIrc: (() => void) | null = null;
+  private unsubAuth: (() => void) | null = null;
 
   state: ChatState = {
-    activeTab: 'nostr',
+    activeTab: 'irc',
     nostrMessages: getLiveChatState().messages,
     nostrConnected: getLiveChatState().connected,
     nostrSending: getLiveChatState().sending,
     liveEventActive: !!getLiveEventState().currentEvent,
     input: '',
     pubkey: getAuthState().pubkey,
+    ircMessages: getIrcState().messages,
+    ircConnected: getIrcState().connected,
+    ircConnecting: getIrcState().connecting,
+    ircChannel: getIrcState().channel,
+    ircNick: getIrcState().nick,
+    ircUserCount: Object.keys(getIrcState().users).length,
   };
 
   componentDidMount() {
@@ -59,17 +76,45 @@ export class ChatContainer extends Component<{}, ChatState> {
     this.unsubLive = subscribeLiveEvents(() => {
       this.setState({ liveEventActive: !!getLiveEventState().currentEvent });
     });
+    this.unsubIrc = subscribeIrc(() => {
+      const is = getIrcState();
+      this.setState({
+        ircMessages: is.messages,
+        ircConnected: is.connected,
+        ircConnecting: is.connecting,
+        ircChannel: is.channel,
+        ircNick: is.nick,
+        ircUserCount: Object.keys(is.users).length,
+      });
+    });
+    this.unsubAuth = subscribeAuth(() => {
+      this.setState({ pubkey: getAuthState().pubkey });
+    });
+    // Auto-connect to IRC #lobby
+    this.connectToIrc();
   }
 
   componentWillUnmount() {
     this.unsubChat?.();
     this.unsubLive?.();
+    this.unsubIrc?.();
+    this.unsubAuth?.();
+    disconnectIrc();
   }
 
   componentDidUpdate(_prevProps: {}, prevState: ChatState) {
     if (prevState.nostrMessages.length !== this.state.nostrMessages.length) {
       this.scrollToBottom();
     }
+    if (prevState.ircMessages.length !== this.state.ircMessages.length) {
+      this.ircMessagesEndRef?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }
+
+  private connectToIrc() {
+    const auth = getAuthState();
+    const nick = auth.pubkey ? shortenNpub(npubEncode(auth.pubkey)) : `guest_${Math.random().toString(36).slice(2, 6)}`;
+    connectIrc(nick, '#lobby');
   }
 
   private scrollToBottom() {
@@ -87,8 +132,10 @@ export class ChatContainer extends Component<{}, ChatState> {
     if (this.state.activeTab === 'nostr') {
       this.setState({ input: '' });
       await sendLiveChatMessage(body);
+    } else if (this.state.activeTab === 'irc') {
+      this.setState({ input: '' });
+      sendIrcMessage(body);
     }
-    // IRC send will be wired later
   };
 
   private handleKeyDown = (e: KeyboardEvent) => {
@@ -147,16 +194,81 @@ export class ChatContainer extends Component<{}, ChatState> {
     );
   }
 
+  private formatIrcTime(ts: number): string {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
   private renderIrcChat() {
+    const { ircMessages, ircConnected, ircConnecting, ircChannel, ircUserCount } = this.state;
+
+    if (ircConnecting) {
+      return (
+        <div class="flex-1 flex items-center justify-center p-4">
+          <div class="text-center space-y-2">
+            <svg class="size-6 animate-spin text-muted-foreground/50 mx-auto" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <p class="text-xs text-muted-foreground">Connecting to IRC...</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (!ircConnected) {
+      return (
+        <div class="flex-1 flex items-center justify-center p-4">
+          <div class="text-center space-y-2">
+            <svg class="size-8 text-muted-foreground/30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" />
+            </svg>
+            <p class="text-xs text-muted-foreground">IRC disconnected</p>
+            <Button size="sm" variant="outline" onClick={() => this.connectToIrc()} className="text-xs">
+              Reconnect
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div class="flex-1 flex items-center justify-center p-4">
-        <div class="text-center space-y-2">
-          <svg class="size-8 text-muted-foreground/30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" />
-          </svg>
-          <p class="text-xs text-muted-foreground">IRC Chat</p>
-          <p class="text-[10px] text-muted-foreground/50">Powered by Ergo — coming soon</p>
-          <p class="text-[10px] text-muted-foreground/50">Connect via Hyphae at chat.mycelium.social</p>
+      <div class="flex-1 flex flex-col min-h-0">
+        {/* Channel info bar */}
+        {ircChannel && (
+          <div class="shrink-0 px-3 py-1.5 border-b border-border/50 flex items-center gap-2">
+            <span class="text-xs font-medium text-foreground/80">{ircChannel}</span>
+            <span class="text-[10px] text-muted-foreground">{ircUserCount} users</span>
+          </div>
+        )}
+        {/* Messages */}
+        <div class="flex-1 overflow-y-auto">
+          {ircMessages.length === 0 && (
+            <div class="px-3 py-6 text-center">
+              <p class="text-xs text-muted-foreground/50">Connected to {ircChannel || '#lobby'}. Say hello!</p>
+            </div>
+          )}
+          {ircMessages.map((msg) => {
+            if (msg.type === 'join' || msg.type === 'part' || msg.type === 'quit' || msg.type === 'lifecycle' || msg.type === 'nick') {
+              return (
+                <div key={msg.id} class="px-3 py-0.5">
+                  <span class="text-[10px] text-muted-foreground/40">{msg.text}</span>
+                </div>
+              );
+            }
+            return (
+              <div key={msg.id} class={`px-3 py-1.5 hover:bg-accent/30 transition-colors ${msg.self ? 'bg-accent/10' : ''}`}>
+                <div class="flex items-baseline gap-1.5">
+                  <span class="text-[12px] font-bold truncate max-w-[120px]" style={{ color: pubkeyColor(msg.from || '') }}>
+                    {msg.from || 'server'}
+                  </span>
+                  <span class="text-[10px] text-muted-foreground/40 tabular-nums">{this.formatIrcTime(msg.time)}</span>
+                </div>
+                <p class="text-[13px] text-foreground/90 leading-relaxed break-words mt-0.5">{msg.text}</p>
+              </div>
+            );
+          })}
+          <div ref={(el: HTMLDivElement | null) => { this.ircMessagesEndRef = el; }} />
         </div>
       </div>
     );
@@ -165,7 +277,9 @@ export class ChatContainer extends Component<{}, ChatState> {
   render() {
     const { activeTab, input, nostrSending, liveEventActive, nostrConnected, pubkey } = this.state;
 
-    const canSend = activeTab === 'nostr' && liveEventActive && pubkey && input.trim() && !nostrSending;
+    const canSendNostr = activeTab === 'nostr' && liveEventActive && pubkey && input.trim() && !nostrSending;
+    const canSendIrc = activeTab === 'irc' && this.state.ircConnected && this.state.ircChannel && input.trim();
+    const canSend = canSendNostr || canSendIrc;
 
     return (
       <div class="flex flex-col h-full">
@@ -203,6 +317,9 @@ export class ChatContainer extends Component<{}, ChatState> {
                 <path d="M5.25 8.25h15m-16.5 7.5h15m-1.8-13.5-3.9 19.5m-2.1-19.5-3.9 19.5" />
               </svg>
               IRC
+              {this.state.ircConnected && (
+                <span class="size-1.5 rounded-full bg-green-500" />
+              )}
             </span>
           </button>
         </div>
@@ -210,20 +327,20 @@ export class ChatContainer extends Component<{}, ChatState> {
         {/* Chat content */}
         {activeTab === 'nostr' ? this.renderNostrChat() : this.renderIrcChat()}
 
-        {/* Input — only for nostr tab when broadcast is active */}
-        {activeTab === 'nostr' && liveEventActive && pubkey && (
+        {/* Input — for nostr tab (when broadcast active) or IRC tab (when connected) */}
+        {((activeTab === 'nostr' && liveEventActive && pubkey) || (activeTab === 'irc' && this.state.ircConnected && this.state.ircChannel)) && (
           <div class="shrink-0 border-t border-border p-2">
             <div class="flex gap-1.5">
               <Input
                 value={input}
                 onInput={this.handleInput}
                 onKeyDown={this.handleKeyDown}
-                placeholder="Send a message..."
+                placeholder={activeTab === 'irc' ? `Message ${this.state.ircChannel || '#lobby'}...` : 'Send a message...'}
                 className="text-sm h-8"
-                disabled={nostrSending}
+                disabled={activeTab === 'nostr' && nostrSending}
               />
               <Button size="sm" onClick={this.handleSend} disabled={!canSend} className="h-8 px-3">
-                {nostrSending ? (
+                {nostrSending && activeTab === 'nostr' ? (
                   <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
