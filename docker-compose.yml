@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  ome:
+    image: airensoft/ovenmediaengine:latest
+    ports:
+      - "1935:1935/tcp"   # RTMP ingest
+      - "9999:9999/udp"   # SRT ingest
+      - "3333:3333/tcp"   # LLHLS + WebRTC signaling
+      - "3334:3334/tcp"   # TLS LLHLS + WebRTC signaling
+      - "3478:3478/tcp"   # WebRTC TURN relay
+      - "10000-10004:10000-10004/udp"  # WebRTC ICE candidates
+    environment:
+      - OME_HOST_IP=${OME_HOST_IP:-127.0.0.1}
+      - OME_RTMP_PROV_PORT=1935
+      - OME_SRT_PROV_PORT=9999
+      - OME_LLHLS_STREAM_PORT=3333
+      - OME_WEBRTC_SIGNALLING_PORT=3333
+      - OME_WEBRTC_SIGNALLING_TLS_PORT=3334
+      - OME_WEBRTC_TCP_RELAY_PORT=3478
+      - OME_WEBRTC_CANDIDATE_PORT=10000-10004/udp
+      - OME_ORIGIN_PORT=9000
+      - OME_API_PORT=8081
+    volumes:
+      - ./ome-conf:/opt/ovenmediaengine/bin/origin_conf
+    command: /opt/ovenmediaengine/bin/OvenMediaEngine -c origin_conf
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - OME_API_HOST=ome
+      - OME_API_PORT=8081
+      - OME_API_USER=${OME_API_USER:-admin}
+      - OME_API_PASS=${OME_API_PASS:-admin}
+      - STREAM_KEY=${STREAM_KEY:-}
+    depends_on:
+      - ome
+    restart: unless-stopped
