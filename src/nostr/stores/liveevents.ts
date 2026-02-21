@@ -115,7 +115,7 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
       identifier: `oni-${Date.now()}`,
       title: streamTitle || 'Live Stream',
       status: 'live',
-      streamingUrl: `${window.location.origin}/hls/stream.m3u8`,
+      streamingUrl: `${window.location.origin}/app/stream/llhls.m3u8`,
       starts: Math.floor(Date.now() / 1000),
       currentParticipants: viewerCount,
       participants: [{ pubkey: auth.pubkey, role: 'Host' }],
