@@ -305,29 +305,15 @@ export function disconnectIrc() {
 export function sendIrcMessage(text: string) {
   if (!state.networkId || !activeChannel || !text.trim()) return;
 
-  state = { ...state, sending: true };
-  notify();
-
   send({
     type: 'message',
     networkId: state.networkId,
     target: activeChannel,
     text: text.trim(),
   });
-
-  // Optimistic: add our own message immediately
-  const msg: IrcMessage = {
-    id: `self_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-    time: Date.now(),
-    type: 'message',
-    from: state.nick,
-    text: text.trim(),
-    self: true,
-  };
-  const msgs = [...state.messages, msg];
-  if (msgs.length > MAX_MESSAGES) msgs.splice(0, msgs.length - MAX_MESSAGES);
-  state = { ...state, messages: msgs, sending: false };
-  notify();
+  // Don't add optimistic self-message here — the server-side IrcConnection
+  // handles local echo (or echo-message cap echoes it back via the bridge).
+  // Adding it client-side causes duplicate messages.
 }
 
 /**
