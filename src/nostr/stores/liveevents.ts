@@ -6,6 +6,7 @@ import { getAuthState } from './auth';
 import { getBootstrapState } from './bootstrap';
 import { getSelectedBroadcastUrls } from './broadcast';
 import { startLiveChatSubscription, stopLiveChatSubscription } from './livechat';
+import { getBroadcastConfig } from '../../stores/broadcastconfig';
 
 type Listener = () => void;
 
@@ -112,13 +113,18 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
 
   try {
     const relays = getPublishRelays();
+    const config = getBroadcastConfig();
+    const streamingUrl = config.streamingUrl || `${window.location.origin}/app/stream/llhls.m3u8`;
     const event = await createLiveEvent(auth.pubkey, {
-      identifier: `oni-${Date.now()}`,
-      title: streamTitle || 'Live Stream',
+      identifier: `mycelium-live-${Date.now()}`,
+      title: config.title || streamTitle || 'Live Stream',
+      summary: config.summary || undefined,
+      image: config.image || undefined,
       status: 'live',
-      streamingUrl: `${window.location.origin}/app/stream/llhls.m3u8`,
+      streamingUrl,
       starts: Math.floor(Date.now() / 1000),
       currentParticipants: viewerCount,
+      tags: config.tags.length > 0 ? config.tags : undefined,
       participants: [{ pubkey: auth.pubkey, role: 'Host' }],
       relays,
     });

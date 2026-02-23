@@ -15,8 +15,10 @@ import { shortenNpub, npubEncode } from '../../nostr/utils';
 import { ThemeSelector } from '../ThemeSelector';
 import { StreamTab } from './StreamTab';
 import { NostrSettingsTab } from './NostrSettingsTab';
+import { BroadcastConfigTab } from './BroadcastConfigTab';
+import { loadBroadcastConfig } from '../../stores/broadcastconfig';
 
-type AdminTab = 'stream' | 'nostr';
+type AdminTab = 'stream' | 'broadcast' | 'nostr';
 
 interface AdminPageState {
   activeTab: AdminTab;
@@ -46,6 +48,7 @@ export class AdminPage extends Component<{}, AdminPageState> {
     loadRelayManager();
     syncPoolToActiveProfile();
     loadLiveEventsEnabled();
+    loadBroadcastConfig();
 
     discoverIndexers(10).catch((err) =>
       console.warn('[live-admin] Indexer discovery error:', err)
@@ -200,7 +203,7 @@ export class AdminPage extends Component<{}, AdminPageState> {
         {/* Tab bar */}
         <div class="border-b border-border bg-card px-4">
           <div class="flex gap-1">
-            {(['stream', 'nostr'] as AdminTab[]).map((tab) => (
+            {(['stream', 'broadcast', 'nostr'] as AdminTab[]).map((tab) => (
               <button
                 key={tab}
                 class={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -210,7 +213,7 @@ export class AdminPage extends Component<{}, AdminPageState> {
                 }`}
                 onClick={() => this.setState({ activeTab: tab })}
               >
-                {tab === 'stream' ? 'Stream' : 'Nostr Identity'}
+                {tab === 'stream' ? 'Stream' : tab === 'broadcast' ? 'NIP-53 Broadcast' : 'Nostr Identity'}
               </button>
             ))}
           </div>
@@ -220,6 +223,7 @@ export class AdminPage extends Component<{}, AdminPageState> {
         <div class="flex-1 overflow-y-auto p-6">
           <div class="max-w-4xl mx-auto">
             {activeTab === 'stream' && <StreamTab />}
+            {activeTab === 'broadcast' && <BroadcastConfigTab />}
             {activeTab === 'nostr' && <NostrSettingsTab />}
           </div>
         </div>
