@@ -5,7 +5,7 @@ import { createLiveEvent, publishLiveEvent, updateLiveEvent } from '../nip53';
 import { getAuthState } from './auth';
 import { getBootstrapState } from './bootstrap';
 import { getSelectedBroadcastUrls } from './broadcast';
-import { startLiveChatSubscription, stopLiveChatSubscription } from './livechat';
+import { getBroadcastConfig } from '../../stores/broadcastconfig';
 
 type Listener = () => void;
 
@@ -44,14 +44,14 @@ export function subscribeLiveEvents(listener: Listener): () => void {
 export function setLiveEventsEnabled(enabled: boolean) {
   state = { ...state, enabled };
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('mycelium_live_events_enabled', enabled ? '1' : '0');
+    localStorage.setItem('oni_live_events_enabled', enabled ? '1' : '0');
   }
   notify();
 }
 
 export function loadLiveEventsEnabled() {
   if (typeof localStorage === 'undefined') return;
-  const saved = localStorage.getItem('mycelium_live_events_enabled');
+  const saved = localStorage.getItem('oni_live_events_enabled');
   if (saved !== null) {
     state = { ...state, enabled: saved === '1' };
     notify();
@@ -70,7 +70,7 @@ function getPublishRelays(): string[] {
   // Check if user has explicitly selected outbox relays
   let outbox = allOutbox;
   try {
-    const raw = localStorage.getItem('mycelium_live_outbox_relays_selected');
+    const raw = localStorage.getItem('oni_outbox_relays_selected');
     if (raw) {
       const selected = new Set(JSON.parse(raw) as string[]);
       if (selected.size > 0) {
@@ -105,20 +105,25 @@ function getPublishRelays(): string[] {
  */
 export async function onStreamStart(streamTitle: string, viewerCount: number): Promise<void> {
   const auth = getAuthState();
-  if (!auth.pubkey) return;
+  if (!auth.pubkey || !state.enabled) return;
 
   state = { ...state, isPublishing: true, error: null };
   notify();
 
   try {
     const relays = getPublishRelays();
+    const config = getBroadcastConfig();
+    const streamingUrl = config.streamingUrl || `${window.location.origin}/app/stream/llhls.m3u8`;
     const event = await createLiveEvent(auth.pubkey, {
-      identifier: `oni-${Date.now()}`,
-      title: streamTitle || 'Live Stream',
+      identifier: `mycelium-live-${Date.now()}`,
+      title: config.title || streamTitle || 'Live Stream',
+      summary: config.summary || undefined,
+      image: config.image || undefined,
       status: 'live',
-      streamingUrl: `${window.location.origin}/app/stream/llhls.m3u8`,
+      streamingUrl,
       starts: Math.floor(Date.now() / 1000),
       currentParticipants: viewerCount,
+      tags: config.tags.length > 0 ? config.tags : undefined,
       participants: [{ pubkey: auth.pubkey, role: 'Host' }],
       relays,
     });
@@ -133,11 +138,6 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
           isPublishing: false,
           lastPublished: new Date().toISOString(),
         };
-
-        // Start live chat subscription for this event
-        const dTag = event.tags.find((t) => t[0] === 'd')?.[1] || '';
-        const eventATag = `30311:${auth.pubkey}:${dTag}`;
-        startLiveChatSubscription(eventATag, relays);
 
         // Set up periodic updates (every 60s)
         if (updateInterval) clearInterval(updateInterval);
@@ -182,9 +182,6 @@ export async function onStreamEnd(): Promise<void> {
   } catch (err) {
     console.error('[liveevents] Error ending live event:', err);
   }
-
-  // Stop live chat subscription
-  stopLiveChatSubscription();
 
   state = { ...state, currentEvent: null };
   notify();

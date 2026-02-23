@@ -1,23 +1,21 @@
-// Allowed streamers store — fetches /api/streamers to determine who can broadcast / access admin
+// Streamer whitelist store
+// Fetches allowed pubkeys from /api/streamers endpoint
+
 type Listener = () => void;
 
-export interface StreamersState {
-  allowedPubkeys: string[];
+interface StreamerState {
+  pubkeys: string[];
   loaded: boolean;
 }
 
-let state: StreamersState = {
-  allowedPubkeys: [],
-  loaded: false,
-};
-
+let state: StreamerState = { pubkeys: [], loaded: false };
 const listeners: Set<Listener> = new Set();
 
 function notify() {
   for (const fn of listeners) fn();
 }
 
-export function getStreamersState(): StreamersState {
+export function getStreamerState(): StreamerState {
   return state;
 }
 
@@ -26,31 +24,26 @@ export function subscribeStreamers(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-/**
- * Check if a hex pubkey is in the allowed streamers list.
- * If the list is empty (no ALLOWED_PUBKEYS configured), everyone is allowed.
- */
 export function isAllowedStreamer(pubkey: string | null): boolean {
   if (!pubkey) return false;
-  if (state.allowedPubkeys.length === 0) return true;
-  return state.allowedPubkeys.includes(pubkey);
+  // Empty list = everyone allowed
+  if (state.pubkeys.length === 0) return true;
+  return state.pubkeys.includes(pubkey);
 }
 
 let fetched = false;
 
-export async function fetchAllowedStreamers(): Promise<void> {
+export async function fetchStreamers(): Promise<void> {
   if (fetched) return;
   fetched = true;
-
   try {
     const res = await fetch('/api/streamers');
     if (!res.ok) return;
     const data = await res.json();
-    if (Array.isArray(data.pubkeys)) {
-      state = { allowedPubkeys: data.pubkeys, loaded: true };
-      notify();
-    }
-  } catch (err) {
-    console.warn('[streamers] Failed to fetch allowed streamers:', err);
+    state = { pubkeys: data.pubkeys || [], loaded: true };
+    notify();
+  } catch {
+    state = { ...state, loaded: true };
+    notify();
   }
 }
