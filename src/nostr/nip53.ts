@@ -33,7 +33,7 @@ export interface LiveEventConfig {
  * The caller is responsible for signing (via NIP-07 or NIP-55).
  */
 export function buildLiveEventUnsigned(pubkey: string, config: LiveEventConfig): UnsignedEvent {
-  const identifier = config.identifier || `mycelium-live-${unixNow()}`;
+  const identifier = config.identifier || `oni-${unixNow()}`;
   const tags: string[][] = [['d', identifier]];
 
   if (config.title) tags.push(['title', config.title]);
@@ -147,7 +147,7 @@ export async function updateLiveEvent(
 ): Promise<NostrEvent | null> {
   // Extract identifier from existing event
   const dTag = existingEvent.tags.find((t) => t[0] === 'd');
-  const identifier = dTag ? dTag[1] : `mycelium-live-${unixNow()}`;
+  const identifier = dTag ? dTag[1] : `oni-${unixNow()}`;
 
   // Extract current config from existing event tags
   const currentConfig: LiveEventConfig = {
