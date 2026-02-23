@@ -18,6 +18,35 @@ const ALLOWED_PUBKEYS: string[] = (process.env.ALLOWED_PUBKEYS || "")
 const root = import.meta.dir;
 const publicDir = path.join(root, "dist/public");
 const indexHtml = path.join(publicDir, "index.html");
+const dataDir = path.join(root, "data");
+const profileCachePath = path.join(dataDir, "streamer-profile.json");
+
+// Ensure data directory exists
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+interface CachedProfile {
+  pubkey: string;
+  name: string;
+  displayName: string;
+  picture: string;
+  banner: string;
+  nip05: string;
+  lud16: string;
+  updatedAt: number;
+}
+
+function loadCachedProfile(): CachedProfile | null {
+  try {
+    if (fs.existsSync(profileCachePath)) {
+      return JSON.parse(fs.readFileSync(profileCachePath, "utf-8"));
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function saveCachedProfile(profile: CachedProfile): void {
+  fs.writeFileSync(profileCachePath, JSON.stringify(profile, null, 2));
+}
 
 // Default stream name used by OBS / RTMP ingest
 const DEFAULT_STREAM = "stream";
@@ -68,6 +97,55 @@ const server = Bun.serve({
         { pubkeys: ALLOWED_PUBKEYS },
         { headers: { "Access-Control-Allow-Origin": "*" } },
       );
+    }
+
+    // --- Streamer profile cache ---
+    if (pathname === "/api/profile" && req.method === "GET") {
+      const cached = loadCachedProfile();
+      return Response.json(
+        cached || { pubkey: null },
+        { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" } },
+      );
+    }
+
+    if (pathname === "/api/profile" && req.method === "POST") {
+      try {
+        const body = await req.json() as { pubkey?: string; profile?: Record<string, string> };
+        if (!body.pubkey || !body.profile) {
+          return Response.json({ error: "Missing pubkey or profile" }, { status: 400 });
+        }
+        // Only allow known streamers to update the cache
+        if (ALLOWED_PUBKEYS.length > 0 && !ALLOWED_PUBKEYS.includes(body.pubkey)) {
+          return Response.json({ error: "Not an allowed streamer" }, { status: 403 });
+        }
+        const existing = loadCachedProfile();
+        const profile: CachedProfile = {
+          pubkey: body.pubkey,
+          name: body.profile.name || existing?.name || "",
+          displayName: body.profile.displayName || body.profile.display_name || existing?.displayName || "",
+          picture: body.profile.picture || existing?.picture || "",
+          banner: body.profile.banner || existing?.banner || "",
+          nip05: body.profile.nip05 || existing?.nip05 || "",
+          lud16: body.profile.lud16 || existing?.lud16 || "",
+          updatedAt: Date.now(),
+        };
+        saveCachedProfile(profile);
+        console.log(`[profile] Cached profile for ${body.pubkey.slice(0, 8)}...`);
+        return Response.json({ ok: true }, { headers: { "Access-Control-Allow-Origin": "*" } });
+      } catch {
+        return Response.json({ error: "Invalid body" }, { status: 400 });
+      }
+    }
+
+    // CORS preflight for /api/profile
+    if (pathname === "/api/profile" && req.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
     }
 
     // --- Stream status (probe LLHLS manifest) ---

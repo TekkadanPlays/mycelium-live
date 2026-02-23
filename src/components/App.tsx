@@ -7,12 +7,13 @@ import { StreamInfoPanel } from './StreamInfoPanel';
 import { OfflineBanner } from './OfflineBanner';
 import { ChatContainer } from './ChatContainer';
 import { getAuthState, subscribeAuth, restoreSession, resetAllStores } from '../nostr/stores/auth';
-import { bootstrapUser } from '../nostr/stores/bootstrap';
+import { bootstrapUser, getBootstrapState } from '../nostr/stores/bootstrap';
 import { discoverIndexers } from '../nostr/stores/indexers';
 import { loadLiveEventsEnabled } from '../nostr/stores/liveevents';
 import { initTheme } from '../stores/theme';
 import { getStreamState, subscribeStream, startPolling, stopPolling } from '../stores/stream';
-import { fetchAllowedStreamers } from '../stores/streamers';
+import { fetchAllowedStreamers, isAllowedStreamer } from '../stores/streamers';
+import { fetchStreamerProfile, pushProfileToServer } from '../stores/streamerprofile';
 import type { StreamInfo } from '../stores/stream';
 
 interface AppState {
@@ -50,9 +51,16 @@ export class App extends Component<{}, AppState> {
       // challenges which cause unwanted signer extension popups.
       // Relay connections for NIP-53 publishing happen on-demand when
       // the user clicks "Broadcast to Nostr".
-      bootstrapUser(auth.pubkey).catch((err) =>
-        console.warn('[live] Bootstrap error:', err)
-      );
+      bootstrapUser(auth.pubkey)
+        .then(() => {
+          const bs = getBootstrapState();
+          if (bs.profile && isAllowedStreamer(auth.pubkey!)) {
+            pushProfileToServer(auth.pubkey!, bs.profile);
+          }
+        })
+        .catch((err) =>
+          console.warn('[live] Bootstrap error:', err)
+        );
     }
   }
 
@@ -70,6 +78,7 @@ export class App extends Component<{}, AppState> {
     restoreSession();
     this.onAuthChange();
     fetchAllowedStreamers();
+    fetchStreamerProfile();
 
     // Start polling OME for stream status
     this.unsubStream = subscribeStream(() => {

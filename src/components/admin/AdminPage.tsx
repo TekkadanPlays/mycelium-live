@@ -19,6 +19,8 @@ import { NostrSettingsTab } from './NostrSettingsTab';
 import { BroadcastConfigTab } from './BroadcastConfigTab';
 import { loadBroadcastConfig } from '../../stores/broadcastconfig';
 import { startPolling, stopPolling } from '../../stores/stream';
+import { pushProfileToServer } from '../../stores/streamerprofile';
+import { getBootstrapState, subscribeBootstrap } from '../../nostr/stores/bootstrap';
 
 type AdminTab = 'dashboard' | 'stream' | 'broadcast' | 'nostr';
 
@@ -114,9 +116,17 @@ export class AdminPage extends Component<{}, AdminPageState> {
     this.lastPubkey = auth.pubkey;
 
     if (auth.pubkey) {
-      bootstrapUser(auth.pubkey).catch((err) =>
-        console.warn('[live-admin] Bootstrap error:', err)
-      );
+      bootstrapUser(auth.pubkey)
+        .then(() => {
+          // Push profile to server cache so viewers see the streamer's pfp
+          const bs = getBootstrapState();
+          if (bs.profile && isAllowedStreamer(auth.pubkey!)) {
+            pushProfileToServer(auth.pubkey!, bs.profile);
+          }
+        })
+        .catch((err) =>
+          console.warn('[live-admin] Bootstrap error:', err)
+        );
       // Only authenticate if this pubkey is an allowed streamer
       if (isAllowedStreamer(auth.pubkey)) {
         this.setState({ authenticated: true, authChecking: false });

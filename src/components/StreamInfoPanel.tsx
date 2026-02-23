@@ -3,6 +3,7 @@ import { createElement } from 'inferno-create-element';
 import { Badge, Button } from 'blazecn';
 import { getBootstrapState, subscribeBootstrap } from '../nostr/stores/bootstrap';
 import type { BootstrapProfile } from '../nostr/stores/bootstrap';
+import { getStreamerProfile, subscribeStreamerProfile } from '../stores/streamerprofile';
 
 interface StreamInfoProps {
   online: boolean;
@@ -12,14 +13,22 @@ interface StreamInfoProps {
 
 interface StreamInfoState {
   profile: BootstrapProfile | null;
+  cachedPicture: string;
+  cachedName: string;
+  cachedNip05: string;
   expanded: boolean;
 }
 
 export class StreamInfoPanel extends Component<StreamInfoProps, StreamInfoState> {
   private unsubBootstrap: (() => void) | null = null;
 
+  private unsubStreamer: (() => void) | null = null;
+
   state: StreamInfoState = {
     profile: getBootstrapState().profile,
+    cachedPicture: getStreamerProfile().picture,
+    cachedName: getStreamerProfile().displayName || getStreamerProfile().name,
+    cachedNip05: getStreamerProfile().nip05,
     expanded: false,
   };
 
@@ -28,27 +37,41 @@ export class StreamInfoPanel extends Component<StreamInfoProps, StreamInfoState>
       const bs = getBootstrapState();
       this.setState({ profile: bs.profile });
     });
+    this.unsubStreamer = subscribeStreamerProfile(() => {
+      const sp = getStreamerProfile();
+      this.setState({
+        cachedPicture: sp.picture,
+        cachedName: sp.displayName || sp.name,
+        cachedNip05: sp.nip05,
+      });
+    });
   }
 
   componentWillUnmount() {
     this.unsubBootstrap?.();
+    this.unsubStreamer?.();
   }
 
   render() {
     const { online, streamName, viewerCount } = this.props;
-    const { profile } = this.state;
+    const { profile, cachedPicture, cachedName, cachedNip05 } = this.state;
 
     if (!online) return null;
+
+    // Bootstrap profile (signed-in streamer) takes priority, cached server profile is fallback
+    const picture = profile?.picture || cachedPicture;
+    const hostName = profile?.displayName || profile?.name || cachedName;
+    const nip05 = profile?.nip05 || cachedNip05;
 
     return (
       <div class="border-b border-border bg-card px-4 py-3">
         <div class="flex items-start gap-3">
           {/* Host avatar */}
           <div class="shrink-0">
-            {profile?.picture ? (
+            {picture ? (
               <img
-                src={profile.picture}
-                alt={profile.displayName || profile.name || 'Host'}
+                src={picture}
+                alt={hostName || 'Host'}
                 class="size-10 rounded-full object-cover ring-2 ring-primary/20"
               />
             ) : (
@@ -71,11 +94,11 @@ export class StreamInfoPanel extends Component<StreamInfoProps, StreamInfoState>
             </div>
 
             {/* Host name */}
-            {profile && (profile.displayName || profile.name) && (
+            {hostName && (
               <p class="text-xs text-muted-foreground mt-0.5">
-                {profile.displayName || profile.name}
-                {profile.nip05 && (
-                  <span class="text-muted-foreground/50 ml-1.5">{profile.nip05}</span>
+                {hostName}
+                {nip05 && (
+                  <span class="text-muted-foreground/50 ml-1.5">{nip05}</span>
                 )}
               </p>
             )}
