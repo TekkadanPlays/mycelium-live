@@ -29,6 +29,10 @@ let state: LiveEventState = {
 const listeners: Set<Listener> = new Set();
 let updateInterval: ReturnType<typeof setInterval> | null = null;
 
+// NIP-53 replaceable events expire from relay caches. Re-publish every 45 min
+// to keep the event alive while the stream is running.
+const REPUBLISH_INTERVAL_MS = 45 * 60 * 1000;
+
 function notify() {
   for (const fn of listeners) fn();
 }
@@ -145,11 +149,11 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
         const eventATag = `30311:${auth.pubkey}:${dTag}`;
         startLiveChatSubscription(eventATag, relays);
 
-        // Set up periodic updates (every 60s)
+        // Re-publish the live event periodically to keep it alive on relays
         if (updateInterval) clearInterval(updateInterval);
         updateInterval = setInterval(() => {
-          periodicUpdate(streamTitle, viewerCount);
-        }, 60000);
+          periodicRepublish();
+        }, REPUBLISH_INTERVAL_MS);
       } else {
         state = { ...state, isPublishing: false, error: 'Failed to publish to any relay' };
       }
@@ -197,27 +201,34 @@ export async function onStreamEnd(): Promise<void> {
 }
 
 /**
- * Periodic update of the live event (viewer count, title changes).
+ * Re-sign and re-publish the live event with current broadcastconfig values.
+ * NIP-53 replaceable events (kind 30311) can expire from relay caches,
+ * so we re-publish every ~45 minutes to keep the event discoverable.
+ * Reads fresh config each time so title/summary/tag edits are picked up.
  */
-async function periodicUpdate(streamTitle: string, viewerCount: number): Promise<void> {
+async function periodicRepublish(): Promise<void> {
   const auth = getAuthState();
   if (!auth.pubkey || !state.currentEvent) return;
 
   try {
     const relays = getPublishRelays();
+    const config = getBroadcastConfig();
     const updated = await updateLiveEvent(auth.pubkey, state.currentEvent, {
-      title: streamTitle || 'Live Stream',
-      currentParticipants: viewerCount,
+      title: config.title || 'Live Stream',
+      summary: config.summary || undefined,
+      image: config.image || undefined,
+      tags: config.tags.length > 0 ? config.tags : undefined,
       status: 'live',
     });
 
     if (updated) {
       state = { ...state, currentEvent: updated, lastPublished: new Date().toISOString() };
       await publishLiveEvent(updated, relays);
+      console.log('[liveevents] Re-published live event to keep alive');
       notify();
     }
   } catch (err) {
-    console.error('[liveevents] Error updating live event:', err);
+    console.error('[liveevents] Error re-publishing live event:', err);
   }
 }
 

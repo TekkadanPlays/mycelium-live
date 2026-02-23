@@ -5,7 +5,7 @@ import { getAuthState, subscribeAuth, login, logout } from '../nostr/stores/auth
 import { hasNip07 } from '../nostr/nip07';
 import { shortenNpub, npubEncode } from '../nostr/utils';
 import { ThemeSelector } from './ThemeSelector';
-import { onStreamStart, onStreamEnd, getLiveEventState, subscribeLiveEvents } from '../nostr/stores/liveevents';
+import { getLiveEventState, subscribeLiveEvents } from '../nostr/stores/liveevents';
 import { isAllowedStreamer, subscribeStreamers } from '../stores/streamers';
 
 interface HeaderProps {
@@ -67,15 +67,6 @@ export class Header extends Component<HeaderProps, HeaderState> {
     logout();
   };
 
-  private handleBroadcast = () => {
-    const le = getLiveEventState();
-    if (le.currentEvent) {
-      onStreamEnd();
-    } else {
-      onStreamStart(this.props.streamName || 'Live Stream', 0);
-    }
-  };
-
   render() {
     const { online, viewerCount, streamName, chatVisible, onToggleChat } = this.props;
     const { pubkey, authLoading, liveEventActive, liveEventPublishing } = this.state;
@@ -120,25 +111,27 @@ export class Header extends Component<HeaderProps, HeaderState> {
 
         <div class="flex-1" />
 
-        {/* Broadcast to Nostr button — only for allowed streamers */}
+        {/* Broadcast to Nostr — opens admin dashboard in new tab */}
         {pubkey && this.state.canBroadcast && (
-          <Button
-            variant={liveEventActive ? 'destructive' : online ? 'default' : 'secondary'}
-            size="sm"
-            onClick={this.handleBroadcast}
-            disabled={liveEventPublishing || (!online && !liveEventActive)}
-            className="gap-1.5 text-xs"
-          >
-            {liveEventPublishing ? (
-              <span>Publishing...</span>
-            ) : liveEventActive ? (
-              <span class="flex items-center gap-1.5"><svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1 0 12.728 12.728M5.636 5.636a9 9 0 0 1 12.728 12.728M5.636 5.636 18.364 18.364" /></svg>End Broadcast</span>
-            ) : online ? (
-              <span class="flex items-center gap-1.5"><svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788" /></svg>Broadcast to Nostr</span>
-            ) : (
-              <span class="flex items-center gap-1.5"><svg class="size-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788" /></svg>Not Broadcasting</span>
-            )}
-          </Button>
+          <a href="/admin#broadcast" target="_blank" rel="noopener" class="no-underline">
+            <Button
+              variant={liveEventActive ? 'default' : 'secondary'}
+              size="sm"
+              className="gap-1.5 text-xs"
+            >
+              {liveEventActive ? (
+                <span class="flex items-center gap-1.5">
+                  <span class="size-1.5 rounded-full bg-current live-dot" />
+                  Broadcasting
+                </span>
+              ) : (
+                <span class="flex items-center gap-1.5">
+                  <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.652a3.75 3.75 0 0 1 0-5.304m5.304 0a3.75 3.75 0 0 1 0 5.304m-7.425 2.121a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.807-3.808-9.98 0-13.788m13.788 0c3.808 3.807 3.808 9.98 0 13.788" /></svg>
+                  Broadcast
+                </span>
+              )}
+            </Button>
+          </a>
         )}
 
         {/* Theme selector */}
@@ -170,7 +163,7 @@ export class Header extends Component<HeaderProps, HeaderState> {
 
         {/* Admin link — only for allowed streamers */}
         {this.state.canBroadcast && (
-        <a href="/admin" target="_self">
+        <a href="/admin#broadcast" target="_blank" rel="noopener">
           <Button variant="ghost" size="sm">
             <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
