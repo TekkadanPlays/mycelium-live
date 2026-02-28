@@ -69,25 +69,40 @@ const server = Bun.serve({
     const pathname = url.pathname;
 
     // --- Admission webhook (OME calls this) ---
+    // DENY by default — only explicitly allowed streams get through
     if (pathname === "/api/admission" && req.method === "POST") {
       try {
         const body = await req.json();
-        console.log("[admission]", JSON.stringify(body));
+        const direction = body.request?.direction || "";
+        const requestUrl = body.request?.url || "";
+        console.log(`[admission] direction=${direction} url=${requestUrl}`);
 
-        // If a stream key is configured, validate it
-        if (STREAM_KEY && body.request?.direction === "incoming") {
-          const requestUrl = body.request?.url || "";
-          // OME sends the stream key as the stream name in the URL
-          // e.g. rtmp://host/app/STREAM_KEY
-          const streamName = requestUrl.split("/").pop() || "";
-          if (streamName !== STREAM_KEY && streamName !== DEFAULT_STREAM) {
-            return Response.json({ allowed: false, reason: "Invalid stream key" });
-          }
+        // Always allow outgoing (playback) requests
+        if (direction === "outgoing") {
+          return Response.json({ allowed: true });
         }
 
-        return Response.json({ allowed: true });
-      } catch {
-        return Response.json({ allowed: true });
+        // Incoming (publish) — require a valid stream key
+        if (direction === "incoming") {
+          if (!STREAM_KEY) {
+            console.warn("[admission] DENIED: no STREAM_KEY configured, rejecting all ingest");
+            return Response.json({ allowed: false, reason: "Stream ingest disabled (no key configured)" });
+          }
+          const streamName = requestUrl.split("/").pop() || "";
+          if (streamName === STREAM_KEY) {
+            console.log(`[admission] ALLOWED: valid stream key`);
+            return Response.json({ allowed: true });
+          }
+          console.warn(`[admission] DENIED: invalid stream key "${streamName}"`);
+          return Response.json({ allowed: false, reason: "Invalid stream key" });
+        }
+
+        // Unknown direction — deny
+        console.warn(`[admission] DENIED: unknown direction "${direction}"`);
+        return Response.json({ allowed: false, reason: "Unknown request direction" });
+      } catch (err) {
+        console.error("[admission] DENIED: parse error", err);
+        return Response.json({ allowed: false, reason: "Webhook parse error" });
       }
     }
 
@@ -150,10 +165,12 @@ const server = Bun.serve({
 
     // --- Stream status (probe LLHLS manifest) ---
     // Note: /app/* paths are routed by HAProxy directly to OME port 3333
+    // Check for the STREAM_KEY stream (OME names the stream after the key)
     if (pathname === "/api/status") {
-      const online = await checkStreamOnline(DEFAULT_STREAM);
+      const streamName = STREAM_KEY || DEFAULT_STREAM;
+      const online = await checkStreamOnline(streamName);
       return Response.json(
-        { online, stream: online ? DEFAULT_STREAM : null },
+        { online, stream: online ? streamName : null },
         { headers: { "Access-Control-Allow-Origin": "*" } },
       );
     }

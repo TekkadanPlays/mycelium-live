@@ -28,10 +28,32 @@ let state: LiveEventState = {
 
 const listeners: Set<Listener> = new Set();
 let updateInterval: ReturnType<typeof setInterval> | null = null;
+let consecutiveOfflineChecks = 0;
 
-// NIP-53 replaceable events expire from relay caches. Re-publish every 45 min
-// to keep the event alive while the stream is running.
+// Check stream liveness every 2 minutes
+const CHECK_INTERVAL_MS = 2 * 60 * 1000;
+
+// Only re-publish the NIP-53 event every 45 minutes (relays cache replaceable events)
 const REPUBLISH_INTERVAL_MS = 45 * 60 * 1000;
+
+// How many consecutive offline checks before auto-ending (prevents transient failures)
+const OFFLINE_THRESHOLD = 2;
+
+let lastRepublishAt = 0;
+
+/**
+ * Probe the server's /api/status endpoint to check if OME actually has a live stream.
+ */
+async function checkStreamLive(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/status', { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return false;
+    const data = await res.json() as { online?: boolean };
+    return !!data.online;
+  } catch {
+    return false;
+  }
+}
 
 function notify() {
   for (const fn of listeners) fn();
@@ -112,6 +134,14 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
   const auth = getAuthState();
   if (!auth.pubkey) return;
 
+  // Gate: verify OME actually has a live stream before publishing to nostr
+  const streamIsLive = await checkStreamLive();
+  if (!streamIsLive) {
+    state = { ...state, isPublishing: false, error: 'Stream is not live on OME — start streaming first' };
+    notify();
+    return;
+  }
+
   state = { ...state, isPublishing: true, error: null };
   notify();
 
@@ -149,11 +179,13 @@ export async function onStreamStart(streamTitle: string, viewerCount: number): P
         const eventATag = `30311:${auth.pubkey}:${dTag}`;
         startLiveChatSubscription(eventATag, relays);
 
-        // Re-publish the live event periodically to keep it alive on relays
+        // Check liveness every 2 min; re-publish every 45 min
+        lastRepublishAt = Date.now();
+        consecutiveOfflineChecks = 0;
         if (updateInterval) clearInterval(updateInterval);
         updateInterval = setInterval(() => {
           periodicRepublish();
-        }, REPUBLISH_INTERVAL_MS);
+        }, CHECK_INTERVAL_MS);
       } else {
         state = { ...state, isPublishing: false, error: 'Failed to publish to any relay' };
       }
@@ -177,6 +209,8 @@ export async function onStreamEnd(): Promise<void> {
     clearInterval(updateInterval);
     updateInterval = null;
   }
+  consecutiveOfflineChecks = 0;
+  lastRepublishAt = 0;
 
   try {
     const relays = getPublishRelays();
@@ -205,10 +239,37 @@ export async function onStreamEnd(): Promise<void> {
  * NIP-53 replaceable events (kind 30311) can expire from relay caches,
  * so we re-publish every ~45 minutes to keep the event discoverable.
  * Reads fresh config each time so title/summary/tag edits are picked up.
+ *
+ * CRITICAL: Checks OME stream liveness before re-publishing.
+ * If the stream is offline for OFFLINE_THRESHOLD consecutive checks,
+ * auto-publishes an 'ended' event and stops the interval.
  */
 async function periodicRepublish(): Promise<void> {
   const auth = getAuthState();
   if (!auth.pubkey || !state.currentEvent) return;
+
+  // Check if OME stream is actually live before re-publishing
+  const isLive = await checkStreamLive();
+  if (!isLive) {
+    consecutiveOfflineChecks++;
+    console.warn(`[liveevents] Stream offline check ${consecutiveOfflineChecks}/${OFFLINE_THRESHOLD}`);
+    if (consecutiveOfflineChecks >= OFFLINE_THRESHOLD) {
+      console.warn('[liveevents] Stream confirmed offline — auto-ending broadcast');
+      await onStreamEnd();
+      return;
+    }
+    // Don't re-publish while stream appears offline, but wait for next check
+    return;
+  }
+
+  // Stream is live — reset offline counter
+  consecutiveOfflineChecks = 0;
+
+  // Only re-publish to relays if enough time has passed
+  const elapsed = Date.now() - lastRepublishAt;
+  if (elapsed < REPUBLISH_INTERVAL_MS) {
+    return; // too soon, just a liveness check
+  }
 
   try {
     const relays = getPublishRelays();
@@ -222,6 +283,7 @@ async function periodicRepublish(): Promise<void> {
     });
 
     if (updated) {
+      lastRepublishAt = Date.now();
       state = { ...state, currentEvent: updated, lastPublished: new Date().toISOString() };
       await publishLiveEvent(updated, relays);
       console.log('[liveevents] Re-published live event to keep alive');
