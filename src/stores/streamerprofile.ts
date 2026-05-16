@@ -1,9 +1,7 @@
-// Streamer Profile Cache Store
-// Fetches the cached streamer profile from the server (/api/profile)
-// so viewers can see the host's pfp/name without being signed in.
-// The streamer's profile is pushed to the server on sign-in via pushProfileToServer().
+// Streamer Profile Cache Store — fetches cached profile from /api/profile
+// Migrated to Preact Signals
 
-type Listener = () => void;
+import { signal, effect } from '@preact/signals-core';
 
 export interface StreamerProfile {
   pubkey: string | null;
@@ -16,42 +14,27 @@ export interface StreamerProfile {
 }
 
 const EMPTY: StreamerProfile = {
-  pubkey: null,
-  name: '',
-  displayName: '',
-  picture: '',
-  banner: '',
-  nip05: '',
-  lud16: '',
+  pubkey: null, name: '', displayName: '', picture: '',
+  banner: '', nip05: '', lud16: '',
 };
 
-let state: StreamerProfile = { ...EMPTY };
-const listeners: Set<Listener> = new Set();
+// ─── Signal ───
 
-function notify() {
-  for (const fn of listeners) fn();
-}
+export const streamerProfile = signal<StreamerProfile>({ ...EMPTY });
+
+// ─── Actions ───
 
 export function getStreamerProfile(): StreamerProfile {
-  return state;
+  return streamerProfile.value;
 }
 
-export function subscribeStreamerProfile(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-/**
- * Fetch the cached streamer profile from the server.
- * Called on app init so viewers see the host's pfp immediately.
- */
 export async function fetchStreamerProfile(): Promise<void> {
   try {
     const res = await fetch('/api/profile');
     if (!res.ok) return;
     const data = await res.json();
     if (data.pubkey) {
-      state = {
+      streamerProfile.value = {
         pubkey: data.pubkey,
         name: data.name || '',
         displayName: data.displayName || '',
@@ -60,17 +43,12 @@ export async function fetchStreamerProfile(): Promise<void> {
         nip05: data.nip05 || '',
         lud16: data.lud16 || '',
       };
-      notify();
     }
   } catch {
     // Server unavailable — no-op
   }
 }
 
-/**
- * Push the current user's profile to the server cache.
- * Called after bootstrap completes for allowed streamers.
- */
 export async function pushProfileToServer(
   pubkey: string,
   profile: { name?: string; displayName?: string; display_name?: string; picture?: string; banner?: string; nip05?: string; lud16?: string },
@@ -81,18 +59,34 @@ export async function pushProfileToServer(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pubkey, profile }),
     });
-    // Update local state too
-    state = {
+    const prev = streamerProfile.value;
+    streamerProfile.value = {
       pubkey,
-      name: profile.name || state.name,
-      displayName: profile.displayName || profile.display_name || state.displayName,
-      picture: profile.picture || state.picture,
-      banner: profile.banner || state.banner,
-      nip05: profile.nip05 || state.nip05,
-      lud16: profile.lud16 || state.lud16,
+      name: profile.name || prev.name,
+      displayName: profile.displayName || profile.display_name || prev.displayName,
+      picture: profile.picture || prev.picture,
+      banner: profile.banner || prev.banner,
+      nip05: profile.nip05 || prev.nip05,
+      lud16: profile.lud16 || prev.lud16,
     };
-    notify();
   } catch {
     // Server unavailable — no-op
   }
+}
+
+// ─── Legacy compat ───
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeStreamerProfile(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      streamerProfile.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

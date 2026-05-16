@@ -1,7 +1,7 @@
 // IRC store — connects to Ergo via Hyphae WebSocket bridge at chat.mycelium.social/ws
-// Protocol: JSON commands/events matching Hyphae's shared/types.ts
+// Migrated to Preact Signals
 
-type Listener = () => void;
+import { signal, batch, effect } from '@preact/signals-core';
 
 export interface IrcMessage {
   id: string;
@@ -12,16 +12,18 @@ export interface IrcMessage {
   self?: boolean;
 }
 
-export interface IrcState {
-  connected: boolean;
-  connecting: boolean;
-  networkId: string | null;
-  nick: string;
-  channel: string | null;
-  messages: IrcMessage[];
-  users: Record<string, { nick: string; modes: string[] }>;
-  sending: boolean;
-}
+// ─── Signals ───
+
+export const ircConnected = signal(false);
+export const ircConnecting = signal(false);
+export const ircNetworkId = signal<string | null>(null);
+export const ircNick = signal('');
+export const ircChannel = signal<string | null>(null);
+export const ircMessages = signal<IrcMessage[]>([]);
+export const ircUsers = signal<Record<string, { nick: string; modes: string[] }>>({});
+export const ircSending = signal(false);
+
+// ─── Internal state ───
 
 const HYPHAE_WS_URL = 'wss://chat.mycelium.social/ws';
 const IRC_HOST = '127.0.0.1';
@@ -29,43 +31,13 @@ const IRC_PORT = 6667;
 const MAX_MESSAGES = 500;
 const RECONNECT_DELAY = 5000;
 
-let state: IrcState = {
-  connected: false,
-  connecting: false,
-  networkId: null,
-  nick: '',
-  channel: null,
-  messages: [],
-  users: {},
-  sending: false,
-};
-
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let activeChannel: string | null = null;
 let storedNick: string = '';
 let intentionalDisconnect = false;
 
-const listeners: Set<Listener> = new Set();
-
-let notifyScheduled = false;
-function notify() {
-  if (notifyScheduled) return;
-  notifyScheduled = true;
-  queueMicrotask(() => {
-    notifyScheduled = false;
-    for (const fn of listeners) fn();
-  });
-}
-
-export function getIrcState(): IrcState {
-  return state;
-}
-
-export function subscribeIrc(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+// ─── WebSocket send ───
 
 function send(data: any) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -73,111 +45,95 @@ function send(data: any) {
   }
 }
 
+// ─── Server event handler ───
+
 function handleServerEvent(event: any) {
   switch (event.type) {
     case 'network:new':
-      state = { ...state, networkId: event.network.id };
-      notify();
+      ircNetworkId.value = event.network.id;
       break;
 
     case 'network:status':
       if (event.connected) {
-        state = { ...state, connected: true, connecting: false };
-        // Don't send JOIN here — autojoin in ConnectOptions handles it
-        // after IRC registration (001 RPL_WELCOME). Sending JOIN here
-        // races ahead of registration and causes 451 ERR_NOTREGISTERED.
+        batch(() => { ircConnected.value = true; ircConnecting.value = false; });
       } else {
-        // Don't clear messages on temporary disconnect — preserve chat history
-        state = { ...state, connected: false, connecting: false };
+        batch(() => { ircConnected.value = false; ircConnecting.value = false; });
       }
-      notify();
       break;
 
     case 'network:remove':
-      // Preserve messages so they survive reconnect cycles
-      state = {
-        ...state,
-        connected: false,
-        connecting: false,
-        networkId: null,
-        channel: null,
-        users: {},
-      };
-      notify();
+      batch(() => {
+        ircConnected.value = false;
+        ircConnecting.value = false;
+        ircNetworkId.value = null;
+        ircChannel.value = null;
+        ircUsers.value = {};
+      });
       break;
 
     case 'channel:new':
       if (event.channel.name === activeChannel) {
-        state = { ...state, channel: event.channel.name };
-        notify();
+        ircChannel.value = event.channel.name;
       }
       break;
 
     case 'channel:remove':
       if (event.channelName === activeChannel) {
-        state = { ...state, channel: null, messages: [], users: {} };
-        notify();
+        batch(() => {
+          ircChannel.value = null;
+          ircMessages.value = [];
+          ircUsers.value = {};
+        });
       }
       break;
 
     case 'channel:users':
       if (event.channelName === activeChannel) {
-        state = { ...state, users: event.users };
-        notify();
+        ircUsers.value = event.users;
       }
       break;
 
     case 'channel:user_join':
       if (event.channelName === activeChannel && event.user) {
-        state = {
-          ...state,
-          users: { ...state.users, [event.user.nick]: event.user },
-        };
-        notify();
+        ircUsers.value = { ...ircUsers.value, [event.user.nick]: event.user };
       }
       break;
 
     case 'channel:user_part':
       if (event.channelName === activeChannel) {
-        const { [event.nick]: _, ...rest } = state.users;
-        state = { ...state, users: rest };
-        notify();
+        const { [event.nick]: _, ...rest } = ircUsers.value;
+        ircUsers.value = rest;
       }
       break;
 
     case 'channel:user_quit': {
-      const { [event.nick]: _, ...rest } = state.users;
-      state = { ...state, users: rest };
-      notify();
+      const { [event.nick]: _, ...rest } = ircUsers.value;
+      ircUsers.value = rest;
       break;
     }
 
     case 'channel:user_nick':
-      if (state.users[event.oldNick]) {
-        const user = state.users[event.oldNick];
-        const { [event.oldNick]: _, ...rest } = state.users;
-        state = {
-          ...state,
-          users: { ...rest, [event.newNick]: { ...user, nick: event.newNick } },
-        };
-        if (state.nick === event.oldNick) {
-          state = { ...state, nick: event.newNick };
+      if (ircUsers.value[event.oldNick]) {
+        const user = ircUsers.value[event.oldNick];
+        const { [event.oldNick]: _, ...rest } = ircUsers.value;
+        ircUsers.value = { ...rest, [event.newNick]: { ...user, nick: event.newNick } };
+        if (ircNick.value === event.oldNick) {
+          ircNick.value = event.newNick;
         }
-        notify();
       }
       break;
 
     case 'channel:topic':
-      // Could display topic changes as messages
       break;
 
     case 'message':
-      // Only show messages for our active channel or lobby
       if (event.channelName === activeChannel) {
-        const msgs = [...state.messages, event.message];
+        const msgs = [...ircMessages.value, event.message];
         if (msgs.length > MAX_MESSAGES) msgs.splice(0, msgs.length - MAX_MESSAGES);
-        state = { ...state, messages: msgs, sending: false };
-        notify();
+        batch(() => {
+          ircMessages.value = msgs;
+          ircSending.value = false;
+        });
       }
       break;
 
@@ -187,49 +143,41 @@ function handleServerEvent(event: any) {
   }
 }
 
-/**
- * Connect to IRC via Hyphae bridge.
- * @param nick - IRC nickname (e.g. npub short form or display name)
- * @param channel - Channel to auto-join (e.g. '#lobby' or '#live-stream')
- */
+// ─── Public actions ───
+
 export function connectIrc(nick: string, channel: string = '#mycelium-hub') {
-  // Store nick for reconnects
   storedNick = nick;
   intentionalDisconnect = false;
 
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-    // Already connected — just switch channel if needed
-    if (activeChannel !== channel && state.networkId) {
+    if (activeChannel !== channel && ircNetworkId.value) {
       if (activeChannel) {
-        send({ type: 'part', networkId: state.networkId, channel: activeChannel });
+        send({ type: 'part', networkId: ircNetworkId.value, channel: activeChannel });
       }
       activeChannel = channel;
-      send({ type: 'join', networkId: state.networkId, channel });
-      state = { ...state, messages: [], users: {} };
-      notify();
+      send({ type: 'join', networkId: ircNetworkId.value, channel });
+      batch(() => {
+        ircMessages.value = [];
+        ircUsers.value = {};
+      });
     }
     return;
   }
 
-  // If already connecting/reconnecting, don't create duplicate WebSocket
-  if (state.connecting) return;
+  if (ircConnecting.value) return;
 
   activeChannel = channel;
-  // Preserve existing messages on reconnect — only clear on first connect
-  const isReconnect = state.messages.length > 0;
-  state = {
-    ...state,
-    connecting: true,
-    nick,
-    users: {},
-    ...(isReconnect ? {} : { messages: [] }),
-  };
-  notify();
+  const isReconnect = ircMessages.value.length > 0;
+  batch(() => {
+    ircConnecting.value = true;
+    ircNick.value = nick;
+    ircUsers.value = {};
+    if (!isReconnect) ircMessages.value = [];
+  });
 
   ws = new WebSocket(HYPHAE_WS_URL);
 
   ws.onopen = () => {
-    // Send connect command to Hyphae bridge
     send({
       type: 'connect',
       network: {
@@ -253,11 +201,12 @@ export function connectIrc(nick: string, channel: string = '#mycelium-hub') {
   };
 
   ws.onclose = () => {
-    // Preserve messages and channel — only clear connection state
-    state = { ...state, connected: false, connecting: false, networkId: null };
-    notify();
+    batch(() => {
+      ircConnected.value = false;
+      ircConnecting.value = false;
+      ircNetworkId.value = null;
+    });
     ws = null;
-    // Auto-reconnect unless intentionally disconnected
     if (activeChannel && !intentionalDisconnect) {
       reconnectTimer = setTimeout(() => {
         if (activeChannel && !intentionalDisconnect) {
@@ -267,9 +216,7 @@ export function connectIrc(nick: string, channel: string = '#mycelium-hub') {
     }
   };
 
-  ws.onerror = () => {
-    // onclose will fire after this
-  };
+  ws.onerror = () => {};
 }
 
 export function disconnectIrc() {
@@ -280,53 +227,91 @@ export function disconnectIrc() {
   }
   activeChannel = null;
 
-  if (state.networkId && ws) {
-    send({ type: 'disconnect', networkId: state.networkId });
+  if (ircNetworkId.value && ws) {
+    send({ type: 'disconnect', networkId: ircNetworkId.value });
   }
   if (ws) {
     ws.close();
     ws = null;
   }
 
-  state = {
-    connected: false,
-    connecting: false,
-    networkId: null,
-    nick: '',
-    channel: null,
-    messages: [],
-    users: {},
-    sending: false,
-  };
+  batch(() => {
+    ircConnected.value = false;
+    ircConnecting.value = false;
+    ircNetworkId.value = null;
+    ircNick.value = '';
+    ircChannel.value = null;
+    ircMessages.value = [];
+    ircUsers.value = {};
+    ircSending.value = false;
+  });
   storedNick = '';
-  notify();
 }
 
 export function sendIrcMessage(text: string) {
-  if (!state.networkId || !activeChannel || !text.trim()) return;
-
+  if (!ircNetworkId.value || !activeChannel || !text.trim()) return;
   send({
     type: 'message',
-    networkId: state.networkId,
+    networkId: ircNetworkId.value,
     target: activeChannel,
     text: text.trim(),
   });
-  // Don't add optimistic self-message here — the server-side IrcConnection
-  // handles local echo (or echo-message cap echoes it back via the bridge).
-  // Adding it client-side causes duplicate messages.
 }
 
-/**
- * Switch to a different IRC channel (e.g. when broadcast starts, switch to #live-stream)
- */
 export function switchIrcChannel(channel: string) {
-  if (!state.networkId || activeChannel === channel) return;
+  if (!ircNetworkId.value || activeChannel === channel) return;
 
   if (activeChannel) {
-    send({ type: 'part', networkId: state.networkId, channel: activeChannel });
+    send({ type: 'part', networkId: ircNetworkId.value, channel: activeChannel });
   }
   activeChannel = channel;
-  state = { ...state, channel: null, messages: [], users: {} };
-  notify();
-  send({ type: 'join', networkId: state.networkId, channel });
+  batch(() => {
+    ircChannel.value = null;
+    ircMessages.value = [];
+    ircUsers.value = {};
+  });
+  send({ type: 'join', networkId: ircNetworkId.value, channel });
+}
+
+// ─── Legacy compat ───
+
+export interface IrcState {
+  connected: boolean;
+  connecting: boolean;
+  networkId: string | null;
+  nick: string;
+  channel: string | null;
+  messages: IrcMessage[];
+  users: Record<string, { nick: string; modes: string[] }>;
+  sending: boolean;
+}
+
+export function getIrcState(): IrcState {
+  return {
+    connected: ircConnected.value,
+    connecting: ircConnecting.value,
+    networkId: ircNetworkId.value,
+    nick: ircNick.value,
+    channel: ircChannel.value,
+    messages: ircMessages.value,
+    users: ircUsers.value,
+    sending: ircSending.value,
+  };
+}
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeIrc(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      ircConnected.value; ircConnecting.value; ircNetworkId.value;
+      ircNick.value; ircChannel.value; ircMessages.value;
+      ircUsers.value; ircSending.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

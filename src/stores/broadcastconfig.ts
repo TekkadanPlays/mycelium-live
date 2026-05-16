@@ -1,40 +1,33 @@
-// Broadcast Config Store
-// Persists pre-broadcast NIP-53 live event metadata to localStorage
-// The streamer fills this in before going live; values are used when
-// onStreamStart() fires to build the kind-30311 event.
+// Broadcast Config Store — persists pre-broadcast NIP-53 live event metadata
+// Migrated to Preact Signals
 
-type Listener = () => void;
+import { signal, effect } from '@preact/signals-core';
 
 export interface BroadcastConfig {
   title: string;
   summary: string;
   image: string;
-  tags: string[];       // hashtags for the stream
-  streamingUrl: string;  // override; empty = auto-detect from OME
+  tags: string[];
+  streamingUrl: string;
   recordingUrl: string;
 }
 
 const STORAGE_KEY = 'mycelium_broadcast_config';
 
 const DEFAULT_CONFIG: BroadcastConfig = {
-  title: '',
-  summary: '',
-  image: '',
-  tags: [],
-  streamingUrl: '',
-  recordingUrl: '',
+  title: '', summary: '', image: '', tags: [],
+  streamingUrl: '', recordingUrl: '',
 };
 
-let state: BroadcastConfig = { ...DEFAULT_CONFIG };
-const listeners: Set<Listener> = new Set();
+// ─── Signal ───
 
-function notify() {
-  for (const fn of listeners) fn();
-}
+export const broadcastConfig = signal<BroadcastConfig>({ ...DEFAULT_CONFIG });
+
+// ─── Actions ───
 
 function persist() {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(broadcastConfig.value));
   }
 }
 
@@ -43,53 +36,58 @@ export function loadBroadcastConfig(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      state = { ...DEFAULT_CONFIG, ...parsed };
-      notify();
+      broadcastConfig.value = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
     }
   } catch { /* ignore */ }
 }
 
 export function getBroadcastConfig(): BroadcastConfig {
-  return state;
-}
-
-export function subscribeBroadcastConfig(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return broadcastConfig.value;
 }
 
 export function setBroadcastConfigField<K extends keyof BroadcastConfig>(
   key: K,
   value: BroadcastConfig[K],
 ) {
-  state = { ...state, [key]: value };
+  broadcastConfig.value = { ...broadcastConfig.value, [key]: value };
   persist();
-  notify();
 }
 
 export function setBroadcastConfig(partial: Partial<BroadcastConfig>) {
-  state = { ...state, ...partial };
+  broadcastConfig.value = { ...broadcastConfig.value, ...partial };
   persist();
-  notify();
 }
 
 export function resetBroadcastConfig() {
-  state = { ...DEFAULT_CONFIG };
+  broadcastConfig.value = { ...DEFAULT_CONFIG };
   persist();
-  notify();
 }
 
 export function addTag(tag: string) {
   const t = tag.trim().toLowerCase().replace(/^#/, '');
-  if (!t || state.tags.includes(t)) return;
-  state = { ...state, tags: [...state.tags, t] };
+  if (!t || broadcastConfig.value.tags.includes(t)) return;
+  broadcastConfig.value = { ...broadcastConfig.value, tags: [...broadcastConfig.value.tags, t] };
   persist();
-  notify();
 }
 
 export function removeTag(tag: string) {
-  state = { ...state, tags: state.tags.filter((t) => t !== tag) };
+  broadcastConfig.value = { ...broadcastConfig.value, tags: broadcastConfig.value.tags.filter((t) => t !== tag) };
   persist();
-  notify();
+}
+
+// ─── Legacy compat ───
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeBroadcastConfig(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      broadcastConfig.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

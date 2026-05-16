@@ -1,30 +1,14 @@
 // Allowed streamers store — fetches /api/streamers to determine who can broadcast / access admin
-type Listener = () => void;
+// Migrated to Preact Signals
 
-export interface StreamersState {
-  allowedPubkeys: string[];
-  loaded: boolean;
-}
+import { signal, batch, effect } from '@preact/signals-core';
 
-let state: StreamersState = {
-  allowedPubkeys: [],
-  loaded: false,
-};
+// ─── Signals ───
 
-const listeners: Set<Listener> = new Set();
+export const allowedPubkeys = signal<string[]>([]);
+export const streamersLoaded = signal(false);
 
-function notify() {
-  for (const fn of listeners) fn();
-}
-
-export function getStreamersState(): StreamersState {
-  return state;
-}
-
-export function subscribeStreamers(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+// ─── Actions ───
 
 /**
  * Check if a hex pubkey is in the allowed streamers list.
@@ -32,8 +16,8 @@ export function subscribeStreamers(listener: Listener): () => void {
  */
 export function isAllowedStreamer(pubkey: string | null): boolean {
   if (!pubkey) return false;
-  if (state.allowedPubkeys.length === 0) return true;
-  return state.allowedPubkeys.includes(pubkey);
+  if (allowedPubkeys.value.length === 0) return true;
+  return allowedPubkeys.value.includes(pubkey);
 }
 
 let fetched = false;
@@ -47,10 +31,38 @@ export async function fetchAllowedStreamers(): Promise<void> {
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.pubkeys)) {
-      state = { allowedPubkeys: data.pubkeys, loaded: true };
-      notify();
+      batch(() => {
+        allowedPubkeys.value = data.pubkeys;
+        streamersLoaded.value = true;
+      });
     }
   } catch (err) {
     console.warn('[streamers] Failed to fetch allowed streamers:', err);
   }
+}
+
+// ─── Legacy compat ───
+
+export interface StreamersState {
+  allowedPubkeys: string[];
+  loaded: boolean;
+}
+
+export function getStreamersState(): StreamersState {
+  return { allowedPubkeys: allowedPubkeys.value, loaded: streamersLoaded.value };
+}
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeStreamers(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      allowedPubkeys.value; streamersLoaded.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

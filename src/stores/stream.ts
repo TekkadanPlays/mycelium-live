@@ -1,42 +1,23 @@
 // Stream state store — polls /api/status (LLHLS manifest probe) for stream status
+// Migrated to Preact Signals — consumers read .value inside S() wrappers
+// Legacy getStreamState()/subscribeStream() preserved for class component compat
 
-type Listener = () => void;
+import { signal, batch, effect } from '@preact/signals-core';
 
 export interface StreamInfo {
   online: boolean;
   name: string;
 }
 
-export interface StreamState {
-  info: StreamInfo;
-  isLoading: boolean;
-  error: string | null;
-}
+// ─── Signals ───
 
-let state: StreamState = {
-  info: {
-    online: false,
-    name: '',
-  },
-  isLoading: false,
-  error: null,
-};
+export const streamInfo = signal<StreamInfo>({ online: false, name: '' });
+export const streamLoading = signal(false);
+export const streamError = signal<string | null>(null);
 
-const listeners: Set<Listener> = new Set();
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-function notify() {
-  for (const fn of listeners) fn();
-}
-
-export function getStreamState(): StreamState {
-  return state;
-}
-
-export function subscribeStream(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+// ─── Actions ───
 
 export async function pollStreamStatus(): Promise<void> {
   try {
@@ -44,25 +25,22 @@ export async function pollStreamStatus(): Promise<void> {
     if (!res.ok) throw new Error(`Status API ${res.status}`);
     const data = await res.json();
 
-    state = {
-      info: {
-        online: !!data.online,
-        name: data.stream || '',
-      },
-      isLoading: false,
-      error: null,
-    };
-    notify();
+    batch(() => {
+      streamInfo.value = { online: !!data.online, name: data.stream || '' };
+      streamLoading.value = false;
+      streamError.value = null;
+    });
   } catch (err) {
-    state = { ...state, isLoading: false, error: String(err) };
-    notify();
+    batch(() => {
+      streamLoading.value = false;
+      streamError.value = String(err);
+    });
   }
 }
 
 export function startPolling(intervalMs: number = 5000): void {
   if (pollTimer) return;
-  state = { ...state, isLoading: true };
-  notify();
+  streamLoading.value = true;
   pollStreamStatus();
   pollTimer = setInterval(pollStreamStatus, intervalMs);
 }
@@ -76,10 +54,38 @@ export function stopPolling(): void {
 
 export function resetStream(): void {
   stopPolling();
-  state = {
-    info: { online: false, name: '' },
-    isLoading: false,
-    error: null,
-  };
-  notify();
+  batch(() => {
+    streamInfo.value = { online: false, name: '' };
+    streamLoading.value = false;
+    streamError.value = null;
+  });
+}
+
+// ─── Legacy compat (bridge for class components) ───
+
+export interface StreamState {
+  info: StreamInfo;
+  isLoading: boolean;
+  error: string | null;
+}
+
+export function getStreamState(): StreamState {
+  return { info: streamInfo.value, isLoading: streamLoading.value, error: streamError.value };
+}
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeStream(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      // Read all signals to establish tracking
+      streamInfo.value; streamLoading.value; streamError.value;
+      // Notify legacy listeners
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }
