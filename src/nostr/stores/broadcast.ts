@@ -1,13 +1,9 @@
-// Broadcast Relay Discovery Store
-// Discovers relays suitable for broadcasting NIP-53 live events to the network.
-// Uses nostr.watch rstate API (fast) with NIP-66 kind 30166 fallback.
-// "Broadcast" relays are well-connected, write-accepting relays that maximize
-// event propagation across the network.
+// Broadcast Relay Discovery Store — discovers relays for NIP-53 live events
+// Migrated to Preact Signals
 
+import { signal, effect } from '@preact/signals-core';
 import { Relay } from '../relay';
 import type { NostrEvent } from '../event';
-
-type Listener = () => void;
 
 export interface BroadcastRelay {
   url: string;
@@ -25,24 +21,23 @@ export interface BroadcastState {
 
 const STORAGE_KEY = 'mycelium_live_broadcast_relays_selected';
 
-let state: BroadcastState = {
+// ─── Signal ───
+
+export const broadcastState = signal<BroadcastState>({
   relays: [],
   selectedUrls: new Set(),
   isLoading: false,
   error: null,
   source: 'none',
-};
+});
 
-const listeners: Set<Listener> = new Set();
 let activeDiscovery: Promise<void> | null = null;
 
-function notify() {
-  for (const fn of listeners) fn();
-}
+// ─── Internal ───
 
 function persistSelected() {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...state.selectedUrls]));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...broadcastState.value.selectedUrls]));
   }
 }
 
@@ -52,56 +47,46 @@ function loadSelected() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const arr = JSON.parse(raw) as string[];
-      state = { ...state, selectedUrls: new Set(arr) };
+      broadcastState.value = { ...broadcastState.value, selectedUrls: new Set(arr) };
     }
-  } catch { /* ignore */ }
+  } catch {}
 }
+
+// ─── Actions ───
 
 export function getBroadcastState(): BroadcastState {
-  return state;
-}
-
-export function subscribeBroadcast(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return broadcastState.value;
 }
 
 export function getSelectedBroadcastUrls(): string[] {
-  return [...state.selectedUrls];
+  return [...broadcastState.value.selectedUrls];
 }
 
 export function toggleBroadcastRelay(url: string) {
-  const next = new Set(state.selectedUrls);
-  if (next.has(url)) {
-    next.delete(url);
-  } else {
-    next.add(url);
-  }
-  state = { ...state, selectedUrls: next };
+  const next = new Set(broadcastState.value.selectedUrls);
+  if (next.has(url)) next.delete(url);
+  else next.add(url);
+  broadcastState.value = { ...broadcastState.value, selectedUrls: next };
   persistSelected();
-  notify();
 }
 
 export function setBroadcastRelaySelected(url: string, selected: boolean) {
-  const next = new Set(state.selectedUrls);
+  const next = new Set(broadcastState.value.selectedUrls);
   if (selected) next.add(url);
   else next.delete(url);
-  state = { ...state, selectedUrls: next };
+  broadcastState.value = { ...broadcastState.value, selectedUrls: next };
   persistSelected();
-  notify();
 }
 
 export function selectAllBroadcast() {
-  const next = new Set(state.relays.map((r) => r.url));
-  state = { ...state, selectedUrls: next };
+  const next = new Set(broadcastState.value.relays.map((r) => r.url));
+  broadcastState.value = { ...broadcastState.value, selectedUrls: next };
   persistSelected();
-  notify();
 }
 
 export function deselectAllBroadcast() {
-  state = { ...state, selectedUrls: new Set() };
+  broadcastState.value = { ...broadcastState.value, selectedUrls: new Set() };
   persistSelected();
-  notify();
 }
 
 // Well-known broadcast relays as fallback
@@ -121,13 +106,9 @@ const MONITOR_RELAYS = [
   'wss://history.nostr.watch',
 ];
 
-/**
- * Discover broadcast relays. Returns cached results if already loaded.
- */
 export function discoverBroadcastRelays(count: number = 20): Promise<void> {
-  if (state.relays.length > 0 && !state.isLoading) {
-    return Promise.resolve();
-  }
+  const s = broadcastState.value;
+  if (s.relays.length > 0 && !s.isLoading) return Promise.resolve();
   if (activeDiscovery) return activeDiscovery;
 
   loadSelected();
@@ -136,34 +117,28 @@ export function discoverBroadcastRelays(count: number = 20): Promise<void> {
 }
 
 async function doDiscover(count: number): Promise<void> {
-  state = { ...state, isLoading: true, error: null };
-  notify();
+  broadcastState.value = { ...broadcastState.value, isLoading: true, error: null };
 
-  // 1. Try rstate API
   try {
     const relays = await fetchBroadcastFromRstate(count);
     if (relays.length > 0) {
       console.log('[broadcast] Discovered', relays.length, 'broadcast relays via rstate');
-      state = { ...state, relays, source: 'rstate', isLoading: false, error: null };
-      notify();
+      broadcastState.value = { ...broadcastState.value, relays, source: 'rstate', isLoading: false, error: null };
       return;
     }
   } catch (err) {
     console.warn('[broadcast] rstate unavailable:', err);
   }
 
-  // 2. Instant fallback
   console.log('[broadcast] Using fallback broadcast relays');
-  state = {
-    ...state,
+  broadcastState.value = {
+    ...broadcastState.value,
     relays: FALLBACK_BROADCAST.slice(0, count),
     source: 'fallback',
     isLoading: false,
     error: null,
   };
-  notify();
 
-  // 3. Background NIP-66 upgrade
   upgradeViaNip66(count);
 }
 
@@ -172,18 +147,11 @@ async function fetchBroadcastFromRstate(count: number): Promise<BroadcastRelay[]
   const timer = setTimeout(() => controller.abort(), 5000);
 
   try {
-    // Query rstate for well-connected relays sorted by connectivity
     const params = new URLSearchParams({
-      limit: String(count * 3),
-      offset: '0',
-      sortBy: 'lastSeen',
-      sortOrder: 'desc',
-      format: 'detailed',
+      limit: String(count * 3), offset: '0',
+      sortBy: 'lastSeen', sortOrder: 'desc', format: 'detailed',
     });
-    const res = await fetch(`/relays?${params}`, {
-      signal: controller.signal,
-    });
-
+    const res = await fetch(`/relays?${params}`, { signal: controller.signal });
     if (!res.ok) throw new Error(`rstate ${res.status}`);
 
     const data = await res.json();
@@ -193,26 +161,18 @@ async function fetchBroadcastFromRstate(count: number): Promise<BroadcastRelay[]
       .filter((r: any) => {
         if (!r.relayUrl || !r.relayUrl.startsWith('wss://')) return false;
         if (r.network?.value && r.network.value !== 'clearnet') return false;
-        // Prefer relays that accept writes (not read-only)
         if (r.readOnly?.value === true) return false;
         return true;
       })
       .map((r: any) => {
         const nips: number[] = [];
         if (r.supportedNips?.value && Array.isArray(r.supportedNips.value)) {
-          for (const n of r.supportedNips.value) {
-            nips.push(typeof n === 'number' ? n : parseInt(n, 10));
-          }
+          for (const n of r.supportedNips.value) nips.push(typeof n === 'number' ? n : parseInt(n, 10));
         }
-        return {
-          url: r.relayUrl.replace(/\/+$/, ''),
-          rtt: r.rtt?.open?.value ?? 9999,
-          nips,
-        };
+        return { url: r.relayUrl.replace(/\/+$/, ''), rtt: r.rtt?.open?.value ?? 9999, nips };
       })
       .sort((a, b) => a.rtt - b.rtt);
 
-    // Filter: NIP-53 relays first, then fill with others
     const seen = new Set<string>();
     const result: BroadcastRelay[] = [];
     const nip53 = scored.filter((r) => r.nips.includes(53));
@@ -223,7 +183,6 @@ async function fetchBroadcastFromRstate(count: number): Promise<BroadcastRelay[]
       result.push(r);
       if (result.length >= count) break;
     }
-
     return result;
   } finally {
     clearTimeout(timer);
@@ -246,8 +205,7 @@ function upgradeViaNip66(count: number) {
 
     if (sorted.length > 0) {
       console.log('[broadcast] Upgraded to', sorted.length, 'relays via NIP-66');
-      state = { ...state, relays: sorted, source: 'nip66' };
-      notify();
+      broadcastState.value = { ...broadcastState.value, relays: sorted, source: 'nip66' };
     }
   }
 
@@ -263,7 +221,6 @@ function upgradeViaNip66(count: number) {
             const url = dTag[1].replace(/\/+$/, '');
             if (!url.startsWith('wss://')) return;
 
-            // Check if relay is read-only
             const readOnly = event.tags.find((t) => t[0] === 'R' && t[1] === 'read');
             if (readOnly) return;
 
@@ -273,15 +230,11 @@ function upgradeViaNip66(count: number) {
 
             const nips: number[] = [];
             for (const tag of event.tags) {
-              if (tag[0] === 'N' && tag[1]) {
-                nips.push(parseInt(tag[1], 10));
-              }
+              if (tag[0] === 'N' && tag[1]) nips.push(parseInt(tag[1], 10));
             }
 
             const existing = relayMap.get(url);
-            if (!existing || rtt < existing.rtt) {
-              relayMap.set(url, { url, rtt, nips });
-            }
+            if (!existing || rtt < existing.rtt) relayMap.set(url, { url, rtt, nips });
           },
           () => {
             relay.unsubscribe(subId);
@@ -299,12 +252,25 @@ function upgradeViaNip66(count: number) {
 }
 
 export function resetBroadcast() {
-  state = {
-    relays: [],
-    selectedUrls: new Set(),
-    isLoading: false,
-    error: null,
-    source: 'none',
+  broadcastState.value = {
+    relays: [], selectedUrls: new Set(),
+    isLoading: false, error: null, source: 'none',
   };
-  notify();
+}
+
+// ─── Legacy compat ───
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeBroadcast(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      broadcastState.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

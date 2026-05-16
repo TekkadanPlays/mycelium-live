@@ -1,13 +1,14 @@
+// Bootstrap Store — discovers user profile and relay list from indexers
+// Migrated to Preact Signals
+import { signal, effect } from '@preact/signals-core';
 import { Relay } from '../relay';
 import { Kind } from '../event';
 import type { NostrEvent } from '../event';
-import { getIndexerUrls, discoverIndexers, getIndexerState, subscribeIndexers } from './indexers';
+import { getIndexerUrls, discoverIndexers, indexerState, subscribeIndexers } from './indexers';
 import { getPool } from './relay';
 import { addRelayToProfile, removeRelayFromProfile, getRelayManagerState } from './relaymanager';
 import { signWithExtension } from '../nip07';
-import { getAuthState } from './auth';
-
-type Listener = () => void;
+import { authPubkey } from './auth';
 
 export interface BootstrapProfile {
   name: string;
@@ -26,12 +27,8 @@ export interface RelayListEntry {
 }
 
 export type BootstrapPhase =
-  | 'idle'
-  | 'discovering_indexers'
-  | 'querying_indexers'
-  | 'connecting_relays'
-  | 'ready'
-  | 'error';
+  | 'idle' | 'discovering_indexers' | 'querying_indexers'
+  | 'connecting_relays' | 'ready' | 'error';
 
 export interface BootstrapState {
   phase: BootstrapPhase;
@@ -48,138 +45,70 @@ export interface BootstrapState {
   error: string | null;
 }
 
-let state: BootstrapState = {
-  phase: 'idle',
-  profile: null,
-  profileEvent: null,
-  relayList: [],
-  relayListEvent: null,
-  contactsEvent: null,
-  followingCount: 0,
-  indexersQueried: 0,
-  indexersResponded: 0,
-  outboxConnected: 0,
-  inboxConnected: 0,
-  error: null,
+const INITIAL: BootstrapState = {
+  phase: 'idle', profile: null, profileEvent: null,
+  relayList: [], relayListEvent: null, contactsEvent: null,
+  followingCount: 0, indexersQueried: 0, indexersResponded: 0,
+  outboxConnected: 0, inboxConnected: 0, error: null,
 };
 
-const listeners: Set<Listener> = new Set();
+// ─── Signal ───
 
-let notifyScheduled = false;
-function notify() {
-  if (notifyScheduled) return;
-  notifyScheduled = true;
-  queueMicrotask(() => {
-    notifyScheduled = false;
-    for (const fn of listeners) fn();
-  });
-}
-
-export function getBootstrapState(): BootstrapState {
-  return state;
-}
-
-export function subscribeBootstrap(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+export const bootstrapState = signal<BootstrapState>({ ...INITIAL });
 
 let ephemeralRelays: Relay[] = [];
 let bootstrappedPubkey: string | null = null;
 let activeBootstrap: Promise<void> | null = null;
 
+// ─── Actions ───
+
+export function getBootstrapState(): BootstrapState {
+  return bootstrapState.value;
+}
+
 export function resetBootstrap(): void {
   cleanupEphemeral();
   bootstrappedPubkey = null;
   activeBootstrap = null;
-  state = {
-    phase: 'idle',
-    profile: null,
-    profileEvent: null,
-    relayList: [],
-    relayListEvent: null,
-    contactsEvent: null,
-    followingCount: 0,
-    indexersQueried: 0,
-    indexersResponded: 0,
-    outboxConnected: 0,
-    inboxConnected: 0,
-    error: null,
-  };
-  notify();
+  bootstrapState.value = { ...INITIAL };
 }
 
 export async function bootstrapUser(pubkey: string): Promise<void> {
-  if (bootstrappedPubkey === pubkey && state.phase === 'ready') {
-    return;
-  }
-  if (bootstrappedPubkey === pubkey && activeBootstrap) {
-    return activeBootstrap;
-  }
+  const s = bootstrapState.value;
+  if (bootstrappedPubkey === pubkey && s.phase === 'ready') return;
+  if (bootstrappedPubkey === pubkey && activeBootstrap) return activeBootstrap;
 
   bootstrappedPubkey = pubkey;
-  activeBootstrap = doBootstrap(pubkey).finally(() => {
-    activeBootstrap = null;
-  });
+  activeBootstrap = doBootstrap(pubkey).finally(() => { activeBootstrap = null; });
   return activeBootstrap;
 }
 
 async function doBootstrap(pubkey: string): Promise<void> {
-  state = {
+  bootstrapState.value = {
+    ...INITIAL,
     phase: 'discovering_indexers',
-    profile: null,
-    profileEvent: null,
-    relayList: [],
-    relayListEvent: null,
-    contactsEvent: null,
-    followingCount: 0,
-    indexersQueried: 0,
-    indexersResponded: 0,
-    outboxConnected: 0,
-    inboxConnected: 0,
-    error: null,
   };
-  notify();
 
-  // 1. Discover indexers if not already done
-  const indexerState = getIndexerState();
-  if (indexerState.urls.length === 0) {
-    await discoverIndexers(10);
-  }
+  const is = indexerState.value;
+  if (is.urls.length === 0) await discoverIndexers(10);
 
   const indexerUrls = getIndexerUrls();
   if (indexerUrls.length === 0) {
-    state = { ...state, phase: 'error', error: 'No indexer relays found' };
-    notify();
+    bootstrapState.value = { ...bootstrapState.value, phase: 'error', error: 'No indexer relays found' };
     return;
   }
 
-  // Populate Indexers relay manager profile
   syncIndexersToManager(indexerUrls);
 
-  // Listen for NIP-66 background upgrades
   subscribeIndexers(() => {
     const upgraded = getIndexerUrls();
-    if (upgraded.length > 0) {
-      syncIndexersToManager(upgraded);
-    }
+    if (upgraded.length > 0) syncIndexersToManager(upgraded);
   });
 
-  // 2. Query indexers for kind-0, kind-10002, kind-3
-  state = { ...state, phase: 'querying_indexers', indexersQueried: indexerUrls.length };
-  notify();
-
+  bootstrapState.value = { ...bootstrapState.value, phase: 'querying_indexers', indexersQueried: indexerUrls.length };
   await queryIndexers(pubkey, indexerUrls);
 
-  // 3. Skip connecting to outbox/inbox relays on the live streaming page.
-  // Those connections trigger NIP-42 AUTH challenges which cause unwanted
-  // signer extension popups. Relay connections for NIP-53 publishing
-  // happen on-demand when the user clicks "Broadcast to Nostr".
-
-  // 4. Done
-  state = { ...state, phase: 'ready' };
-  notify();
-
+  bootstrapState.value = { ...bootstrapState.value, phase: 'ready' };
   cleanupEphemeral();
 }
 
@@ -189,15 +118,11 @@ function queryIndexers(pubkey: string, indexerUrls: string[]): Promise<void> {
     const total = indexerUrls.length;
     const timeout = setTimeout(() => finish(), 15000);
 
-    function finish() {
-      clearTimeout(timeout);
-      resolve();
-    }
+    function finish() { clearTimeout(timeout); resolve(); }
 
     function onIndexerDone() {
       responded++;
-      state = { ...state, indexersResponded: responded };
-      notify();
+      bootstrapState.value = { ...bootstrapState.value, indexersResponded: responded };
       if (responded >= total) finish();
     }
 
@@ -207,10 +132,7 @@ function queryIndexers(pubkey: string, indexerUrls: string[]): Promise<void> {
 
       relay.connect()
         .then(() => {
-          if (relay.status !== 'connected') {
-            onIndexerDone();
-            return;
-          }
+          if (relay.status !== 'connected') { onIndexerDone(); return; }
 
           const subId = relay.subscribe(
             [
@@ -219,45 +141,26 @@ function queryIndexers(pubkey: string, indexerUrls: string[]): Promise<void> {
               { kinds: [Kind.Contacts], authors: [pubkey], limit: 1 },
             ],
             (event: NostrEvent) => {
+              const s = bootstrapState.value;
               if (event.kind === Kind.Metadata) {
-                if (!state.profileEvent || event.created_at > state.profileEvent.created_at) {
-                  state = {
-                    ...state,
-                    profileEvent: event,
-                    profile: parseProfile(event),
-                  };
-                  notify();
+                if (!s.profileEvent || event.created_at > s.profileEvent.created_at) {
+                  bootstrapState.value = { ...s, profileEvent: event, profile: parseProfile(event) };
                 }
               } else if (event.kind === Kind.RelayList) {
-                if (!state.relayListEvent || event.created_at > state.relayListEvent.created_at) {
-                  state = {
-                    ...state,
-                    relayListEvent: event,
-                    relayList: parseRelayList(event),
-                  };
-                  notify();
+                if (!s.relayListEvent || event.created_at > s.relayListEvent.created_at) {
+                  bootstrapState.value = { ...s, relayListEvent: event, relayList: parseRelayList(event) };
                 }
               } else if (event.kind === Kind.Contacts) {
-                if (!state.contactsEvent || event.created_at > state.contactsEvent.created_at) {
+                if (!s.contactsEvent || event.created_at > s.contactsEvent.created_at) {
                   const count = event.tags.filter((t) => t[0] === 'p' && t[1]).length;
-                  state = {
-                    ...state,
-                    contactsEvent: event,
-                    followingCount: count,
-                  };
-                  notify();
+                  bootstrapState.value = { ...s, contactsEvent: event, followingCount: count };
                 }
               }
             },
-            () => {
-              relay.unsubscribe(subId);
-              onIndexerDone();
-            },
+            () => { relay.unsubscribe(subId); onIndexerDone(); },
           );
         })
-        .catch(() => {
-          onIndexerDone();
-        });
+        .catch(() => onIndexerDone());
     }
   });
 }
@@ -273,14 +176,10 @@ async function connectUserRelays(relayList: RelayListEntry[]): Promise<void> {
   const inbox = mgr.profiles.find((p) => p.id === 'inbox');
 
   for (const url of writeRelays) {
-    if (outbox && !outbox.relays.includes(url)) {
-      addRelayToProfile('outbox', url);
-    }
+    if (outbox && !outbox.relays.includes(url)) addRelayToProfile('outbox', url);
   }
   for (const url of readRelays) {
-    if (inbox && !inbox.relays.includes(url)) {
-      addRelayToProfile('inbox', url);
-    }
+    if (inbox && !inbox.relays.includes(url)) addRelayToProfile('inbox', url);
   }
 
   const allUrls = new Set([...writeRelays, ...readRelays]);
@@ -293,17 +192,15 @@ async function connectUserRelays(relayList: RelayListEntry[]): Promise<void> {
       connectPromises.push(
         relay.connect()
           .then(() => {
+            const s = bootstrapState.value;
             if (writeRelays.includes(url)) {
-              state = { ...state, outboxConnected: state.outboxConnected + 1 };
+              bootstrapState.value = { ...s, outboxConnected: s.outboxConnected + 1 };
             }
             if (readRelays.includes(url)) {
-              state = { ...state, inboxConnected: state.inboxConnected + 1 };
+              bootstrapState.value = { ...bootstrapState.value, inboxConnected: bootstrapState.value.inboxConnected + 1 };
             }
-            notify();
           })
-          .catch((err) => {
-            console.warn(`[bootstrap] Failed to connect to ${url}:`, err);
-          }),
+          .catch((err) => console.warn(`[bootstrap] Failed to connect to ${url}:`, err)),
       );
     }
   }
@@ -317,41 +214,29 @@ function syncIndexersToManager(indexerUrls: string[]) {
   if (!indexers) return;
 
   for (const url of indexers.relays) {
-    if (!indexerUrls.includes(url)) {
-      removeRelayFromProfile('indexers', url);
-    }
+    if (!indexerUrls.includes(url)) removeRelayFromProfile('indexers', url);
   }
   for (const url of indexerUrls) {
-    if (!indexers.relays.includes(url)) {
-      addRelayToProfile('indexers', url);
-    }
+    if (!indexers.relays.includes(url)) addRelayToProfile('indexers', url);
   }
 }
 
 function cleanupEphemeral() {
   for (const relay of ephemeralRelays) {
     const pool = getPool();
-    if (!pool.getRelay(relay.url)) {
-      relay.disconnect();
-    }
+    if (!pool.getRelay(relay.url)) relay.disconnect();
   }
   ephemeralRelays = [];
 }
 
 function parseProfile(event: NostrEvent): BootstrapProfile {
   let meta: Record<string, string> = {};
-  try {
-    meta = JSON.parse(event.content);
-  } catch { /* ignore */ }
+  try { meta = JSON.parse(event.content); } catch {}
 
   return {
-    name: meta.name || '',
-    displayName: meta.display_name || meta.displayName || '',
-    picture: meta.picture || '',
-    banner: meta.banner || '',
-    about: meta.about || '',
-    nip05: meta.nip05 || '',
-    lud16: meta.lud16 || '',
+    name: meta.name || '', displayName: meta.display_name || meta.displayName || '',
+    picture: meta.picture || '', banner: meta.banner || '',
+    about: meta.about || '', nip05: meta.nip05 || '', lud16: meta.lud16 || '',
   };
 }
 
@@ -371,9 +256,26 @@ function parseRelayList(event: NostrEvent): RelayListEntry[] {
 }
 
 export function getOutboxUrls(): string[] {
-  return state.relayList.filter((r) => r.write).map((r) => r.url);
+  return bootstrapState.value.relayList.filter((r) => r.write).map((r) => r.url);
 }
 
 export function getInboxUrls(): string[] {
-  return state.relayList.filter((r) => r.read).map((r) => r.url);
+  return bootstrapState.value.relayList.filter((r) => r.read).map((r) => r.url);
+}
+
+// ─── Legacy compat ───
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeBootstrap(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      bootstrapState.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }

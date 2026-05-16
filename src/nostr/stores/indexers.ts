@@ -1,10 +1,9 @@
+// Indexer Discovery Store — discovers best indexer relays
+// Migrated to Preact Signals
+
+import { signal, effect } from '@preact/signals-core';
 import { Relay } from '../relay';
 import type { NostrEvent } from '../event';
-
-// Indexer Discovery Store
-// Discovers the best indexer relays for bootstrapping user profile and NIP-65 lookups.
-
-type Listener = () => void;
 
 export interface IndexerState {
   urls: string[];
@@ -13,37 +12,25 @@ export interface IndexerState {
   error: string | null;
 }
 
-let state: IndexerState = {
+// ─── Signal ───
+
+export const indexerState = signal<IndexerState>({
   urls: [],
   source: 'none',
   isLoading: false,
   error: null,
-};
+});
 
-const listeners: Set<Listener> = new Set();
 let activeDiscovery: Promise<void> | null = null;
 
-let notifyScheduled = false;
-function notify() {
-  if (notifyScheduled) return;
-  notifyScheduled = true;
-  queueMicrotask(() => {
-    notifyScheduled = false;
-    for (const fn of listeners) fn();
-  });
-}
+// ─── Reads ───
 
 export function getIndexerState(): IndexerState {
-  return state;
+  return indexerState.value;
 }
 
 export function getIndexerUrls(): string[] {
-  return state.urls;
-}
-
-export function subscribeIndexers(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return indexerState.value.urls;
 }
 
 // Well-known relays that are reliable indexers
@@ -61,36 +48,27 @@ const MONITOR_RELAYS: string[] = [
   'wss://history.nostr.watch',
 ];
 
-export function discoverIndexers(count: number = 10): Promise<void> {
-  if (state.urls.length > 0 && !state.isLoading) {
-    return Promise.resolve();
-  }
-  if (activeDiscovery) {
-    return activeDiscovery;
-  }
+// ─── Actions ───
 
-  activeDiscovery = doDiscover(count).finally(() => {
-    activeDiscovery = null;
-  });
+export function discoverIndexers(count: number = 10): Promise<void> {
+  if (indexerState.value.urls.length > 0 && !indexerState.value.isLoading) return Promise.resolve();
+  if (activeDiscovery) return activeDiscovery;
+
+  activeDiscovery = doDiscover(count).finally(() => { activeDiscovery = null; });
   return activeDiscovery;
 }
 
 async function doDiscover(count: number): Promise<void> {
-  state = { ...state, isLoading: true, error: null };
-  notify();
+  indexerState.value = { ...indexerState.value, isLoading: true, error: null };
 
-  // Use well-known fallback indexers immediately — no rstate API call
-  // (rstate only works when co-hosted with nostr.watch, not standalone Oni)
   console.log('[indexers] Using fallback indexers');
-  state = {
+  indexerState.value = {
     urls: FALLBACK_INDEXERS.slice(0, count),
     source: 'fallback',
     isLoading: false,
     error: null,
   };
-  notify();
 
-  // Background NIP-66 upgrade (non-blocking)
   upgradeViaNip66(count);
 }
 
@@ -100,16 +78,10 @@ async function fetchFromRstate(count: number): Promise<string[]> {
 
   try {
     const params = new URLSearchParams({
-      limit: String(count * 3),
-      offset: '0',
-      sortBy: 'lastSeen',
-      sortOrder: 'desc',
-      format: 'detailed',
+      limit: String(count * 3), offset: '0',
+      sortBy: 'lastSeen', sortOrder: 'desc', format: 'detailed',
     });
-    const res = await fetch(`https://api.nostr.watch/v1/online`, {
-      signal: controller.signal,
-    });
-
+    const res = await fetch(`https://api.nostr.watch/v1/online`, { signal: controller.signal });
     if (!res.ok) throw new Error(`rstate ${res.status}`);
 
     const data = await res.json();
@@ -139,7 +111,6 @@ async function fetchFromRstate(count: number): Promise<string[]> {
       result.push(r.url);
       if (result.length >= count) break;
     }
-
     return result;
   } finally {
     clearTimeout(timer);
@@ -162,8 +133,7 @@ function upgradeViaNip66(count: number) {
 
     if (sorted.length > 0) {
       console.log('[indexers] Upgraded to', sorted.length, 'relays via NIP-66');
-      state = { urls: sorted, source: 'nip66', isLoading: false, error: null };
-      notify();
+      indexerState.value = { urls: sorted, source: 'nip66', isLoading: false, error: null };
     }
   }
 
@@ -184,9 +154,7 @@ function upgradeViaNip66(count: number) {
             if (rttTag && rttTag[2]) rtt = parseInt(rttTag[2], 10) || 9999;
 
             const existing = relayUrls.get(url);
-            if (!existing || rtt < existing.rtt) {
-              relayUrls.set(url, { rtt });
-            }
+            if (!existing || rtt < existing.rtt) relayUrls.set(url, { rtt });
           },
           () => {
             relay.unsubscribe(subId);
@@ -201,4 +169,21 @@ function upgradeViaNip66(count: number) {
         if (completed >= MONITOR_RELAYS.length) finish();
       });
   }
+}
+
+// ─── Legacy compat ───
+
+const _legacyListeners: Set<() => void> = new Set();
+let _bridgeActive = false;
+
+export function subscribeIndexers(listener: () => void): () => void {
+  _legacyListeners.add(listener);
+  if (!_bridgeActive) {
+    _bridgeActive = true;
+    effect(() => {
+      indexerState.value;
+      for (const fn of _legacyListeners) fn();
+    });
+  }
+  return () => _legacyListeners.delete(listener);
 }
